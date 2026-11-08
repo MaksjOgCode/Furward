@@ -1,4 +1,4 @@
-# **Game Overview:**
+<h2 align="center">Game Overview:</h2>
 
 **Working Title:** Furward
 
@@ -10,13 +10,13 @@
 
 ---
 
-# **High Concept:**
+<h2 align="center">High Concept:</h2>
 
 **Короткая суть:** через 15 лет после катастрофы шиншилла-разведчик зачищает окраины уцелевшего города и продвигается на север. Зачистка территорий помогают расширять безопасное пространство для своего народа.
 
 ---
 
-# **Core Gameplay:**
+<h2 align="center">Core Gameplay:</h2>
 
 **Основной цикл игры:**
 
@@ -37,8 +37,8 @@ block-beta
   lowerLeft --> level
   level -- "Новые враги —\nцикл повторяется" --> enemies
 
-  classDef card width:170px,height:106px,x:-85px,y:-53px,rx:17px,ry:17px,stroke-width:2px
-  class enemies,resources,equipment,boss,level card
+  classDef card width:170px,height:144px,x:-85px,y:-72px,rx:17px,ry:17px,stroke-width:2px
+  style layoutGuide fill:none,stroke:none,width:200px,height:160px
 
   style enemies fill:#fff0f2,stroke:#ffbac4,color:#e96b7b
   style resources fill:#eaf8fd,stroke:#99dff3,color:#249fc6
@@ -52,7 +52,7 @@ block-beta
 
 ---
 
-# **Core Experience:**
+<h2 align="center">Core Experience:</h2>
 
 **Ощущения игрока:**
 
@@ -62,7 +62,7 @@ block-beta
 
 ---
 
-# **Key Features:**
+<h2 align="center">Key Features:</h2>
 
 **Главные особенности игры:**
 
@@ -73,19 +73,19 @@ block-beta
 
 ---
 
-# **Player:**
+<h2 align="center">Player:</h2>
 
 **Аудитория:** любители гипер-казуальных игр, ориентированные на линейный гринд
 
 ---
 
-# **Unique Selling Proposition:**
+<h2 align="center">Unique Selling Proposition:</h2>
 
 **Почему наша игра:** милые вооружённые шиншиллы в серьёзном постапокалиптическом мире. Приятный визуал: стилизованное 3D low/mid-poly с hand-painted подачей. Понятный геймплей: простой цикл вылазок ради восстановления дома.
 
 ---
 
-# **References:**
+<h2 align="center">References:</h2>
 
 - `Archero`: система прогрессии (снаряжение и комнаты)
 - `Tap Titans`: основа боевой системы (кликер + активные скиллы)
