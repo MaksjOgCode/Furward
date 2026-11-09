@@ -1,0 +1,28 @@
+# Unreal-generated project output
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+
+# Generated output of source-built project plugins
+/Plugins/**/Binaries/
+/Plugins/**/DerivedDataCache/
+/Plugins/**/Intermediate/
+/Plugins/**/Saved/
+
+# Visual Studio workspace files and generated solutions
+/.vs/
+/*.sln
+/*.slnx
+/Backup/
+/UpgradeLog*.htm*
+*.suo
+*.user
+
+# Generated Windows cook log (keep authored files in Build)
+/Build/Windows/FileOpenOrder/CookerOpenOrder.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

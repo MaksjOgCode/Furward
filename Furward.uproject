@@ -1,0 +1,53 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"DisableEnginePluginsByDefault": true,
+	"Modules": [
+		{
+			"Name": "Furward",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"TargetPlatforms": [
+		"Win64",
+		"Linux",
+		"Mac"
+	],
+	"Plugins": [
+		{
+			"Name": "ACLPlugin",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		},
+		{
+			"Name": "ContentBrowserAssetDataSource",
+			"Enabled": true,
+			"TargetAllowList": ["Editor"]
+		},
+		{
+			"Name": "ContentBrowserClassDataSource",
+			"Enabled": true,
+			"TargetAllowList": ["Editor"]
+		},
+		{
+			"Name": "EngineAssetDefinitions",
+			"Enabled": true,
+			"TargetAllowList": ["Editor"]
+		},
+		{
+			"Name": "PluginBrowser",
+			"Enabled": true,
+			"TargetAllowList": ["Editor"]
+		},
+		{
+			"Name": "VisualStudioSourceCodeAccess",
+			"Enabled": true,
+			"PlatformAllowList": ["Win64"],
+			"TargetAllowList": ["Editor"]
+		}
+	]
+}
