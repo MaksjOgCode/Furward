@@ -2,17 +2,17 @@
 	"FileVersion": 3,
 	"EngineAssociation": "5.8",
 	"DisableEnginePluginsByDefault": true,
+	"Category": "",
+	"Description": "",
 	"Modules": [
 		{
 			"Name": "Furward",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"CoreUObject"
+			]
 		}
-	],
-	"TargetPlatforms": [
-		"Win64",
-		"Linux",
-		"Mac"
 	],
 	"Plugins": [
 		{
@@ -24,30 +24,35 @@
 			"Enabled": true
 		},
 		{
-			"Name": "ContentBrowserAssetDataSource",
-			"Enabled": true,
-			"TargetAllowList": ["Editor"]
+    			"Name": "ContentBrowserAssetDataSource",
+    			"Enabled": true,
+    			"TargetAllowList": ["Editor"]
 		},
 		{
-			"Name": "ContentBrowserClassDataSource",
-			"Enabled": true,
-			"TargetAllowList": ["Editor"]
+    			"Name": "ContentBrowserClassDataSource",
+    			"Enabled": true,
+    			"TargetAllowList": ["Editor"]
 		},
 		{
-			"Name": "EngineAssetDefinitions",
-			"Enabled": true,
-			"TargetAllowList": ["Editor"]
+    			"Name": "EngineAssetDefinitions",
+    			"Enabled": true,
+    			"TargetAllowList": ["Editor"]
 		},
 		{
-			"Name": "PluginBrowser",
-			"Enabled": true,
-			"TargetAllowList": ["Editor"]
+    			"Name": "PluginBrowser",
+    			"Enabled": true,
+    			"TargetAllowList": ["Editor"]
 		},
 		{
-			"Name": "VisualStudioSourceCodeAccess",
-			"Enabled": true,
-			"PlatformAllowList": ["Win64"],
-			"TargetAllowList": ["Editor"]
+    			"Name": "VisualStudioSourceCodeAccess",
+    			"Enabled": true,
+    			"PlatformAllowList": ["Win64"],
+    			"TargetAllowList": ["Editor"]
 		}
+	],
+	"TargetPlatforms": [
+		"Win64",
+		"Linux",
+		"Mac"
 	]
 }
