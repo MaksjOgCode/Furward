@@ -1,7 +1,7 @@
 // Copyright © 2026 Maksj.OG
 
-
 #include "CombatGameMode.h"
+#include "CombatEnvironmentDefinition.h"
 #include "CombatSession.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -20,6 +20,16 @@ void ACombatGameMode::BeginPlay() {
 	Super::BeginPlay();
 
 	UE_LOG(LogCombatGameMode, Display, TEXT("BeginPlay: %s"), *GetName());
+
+	if (!InitialEnvironment) {
+		UE_LOG(LogCombatGameMode, Warning, TEXT("Initial Environment is unset: assign it in GameMode Class Defaults"));
+	}
+	else if (InitialEnvironment->GetEnvironmentMap().IsNull()) {
+		UE_LOG(LogCombatGameMode, Warning, TEXT("%s: Environment Map is unset: assign a level asset"), *InitialEnvironment->GetName());
+	}
+	else {
+		CombatSession->RequestInitialEnvironment(this, InitialEnvironment->GetEnvironmentMap());
+	}
 }
 
 void ACombatGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason) {
