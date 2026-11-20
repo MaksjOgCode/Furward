@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Читает строку этапа, подгружает окружение и размещает участников для боевой сессии.
+ * @brief Подготавливает первый бой, принимает атаки и закрывает доступ к погибшей цели.
  */
 
 #include "Combat/CombatSession.h"
@@ -224,6 +224,7 @@ void UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Arena)
 	SpawnedEnemy->ApplyDefinition(*InitialEnemy);
 	SpawnedEnemy->FinishSpawning(SpawnTransform);
 	Enemy = SpawnedEnemy;
+	SpawnedEnemy->GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
 
 	UE_LOG(LogCombatSession, Display, TEXT("Enemy spawned: %s in %s using %s"),
 		*SpawnedEnemy->GetName(), *SpawnedEnemy->GetLevel()->GetOutermost()->GetName(), *InitialEnemy->GetName());
@@ -237,7 +238,8 @@ void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
 
 const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 {
-	return Enemy.Get();
+	const ACombatEnemy* CurrentEnemy = Enemy.Get();
+	return CurrentEnemy && !CurrentEnemy->GetAttributes().IsDead() ? CurrentEnemy : nullptr;
 }
 
 bool UCombatSession::InitializeParticipantAttributes(const FCombatBaseAttributes& HeroBase, float HeroCurrentHealth,
@@ -329,6 +331,22 @@ float UCombatSession::ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, flo
 	return AppliedDamage;
 }
 
+void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
+{
+	ACombatEnemy* CurrentEnemy = Enemy.Get();
+	if (Phase != ECombatPhase::Fighting || !CurrentEnemy ||
+		&CurrentEnemy->GetAttributes() != &Source || !Source.IsDead())
+	{
+		return;
+	}
+
+	// Сначала закрываем приём атак, пока актор и его модель остаются в постоянном уровне.
+	Phase = ECombatPhase::ChangingEnemy;
+	CurrentEnemy->DisableClickAreas();
+	UE_LOG(LogCombatSession, Display, TEXT("Combat enemy defeated: %s"), *CurrentEnemy->GetName());
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: ChangingEnemy"));
+}
+
 bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
 {
 	// Перепроверяем сцену в момент запроса. Она должна оставаться доступной во время Ready и Fighting.
@@ -367,6 +385,11 @@ bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
 void UCombatSession::Shutdown() {
 	// Сначала блокируем новые команды. Постоянный уровень продолжает владеть участниками до завершения мира.
 	Phase = ECombatPhase::Leaving;
+	if (ACombatEnemy* CurrentEnemy = Enemy.Get())
+	{
+		CurrentEnemy->GetAttributes().OnDeath().RemoveAll(this);
+	}
+
 	Hero.Reset();
 	Enemy.Reset();
 	InitialEnemy = nullptr;

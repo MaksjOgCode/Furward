@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает выбор этапа, время жизни участников и проверку команд в L_Combat.
+ * @brief Описывает подготовку этапа, приём атак и обработку смерти текущего противника в L_Combat.
  */
 
 #pragma once
@@ -19,6 +19,7 @@ class UWorld;
 class ACombatArena;
 class ACombatHero;
 class ACombatEnemy;
+class UCombatAttributesComponent;
 class UCombatEnemyDefinition;
 struct FCombatBaseAttributes;
 struct FDataTableRowHandle;
@@ -43,6 +44,8 @@ enum class ECombatPhase : uint8
 	Ready,
 	/** @brief По текущему противнику уже применён первый положительный урон. */
 	Fighting,
+	/** @brief Текущий противник погиб. Сессия блокирует атаки до подготовки следующего столкновения. */
+	ChangingEnemy,
 	/** @brief Сессия блокирует команды и освобождает ссылки при завершении. */
 	Leaving
 };
@@ -53,7 +56,7 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия сохраняет ссылки на арену и участников, созданных в игровом мире.
+ * Сессия принимает событие смерти от компонента характеристик текущего противника и закрывает его области клика.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -87,7 +90,7 @@ public:
 	void RequestInitialStage(UObject* WorldContextObject, const FDataTableRowHandle& StageHandle);
 
 	/**
-	 * @brief Блокирует команды и просит Unreal выгрузить окружение при завершении карты.
+	 * @brief Блокирует команды, снимает подписку на смерть противника и запрашивает выгрузку окружения.
 	 *
 	 * GameMode вызывает метод в EndPlay() перед освобождением сессии.
 	 * @post Ссылки на участников, арену, описание противника и объект стриминга очищены.
@@ -97,7 +100,7 @@ public:
 
 	/**
 	 * @brief Даёт контроллеру текущую цель перед трассировкой клика.
-	 * @return Противник, зарегистрированный сессией, или nullptr до его появления и после потери ссылки.
+	 * @return Текущий противник или nullptr до его появления, после его смерти или потери ссылки.
 	 */
 	const ACombatEnemy* GetActiveEnemy() const;
 
@@ -128,7 +131,8 @@ public:
 	 * @param[in] Target Противник, для которого рассчитан урон.
 	 * @param[in] ResolvedDamage Урон после учёта игровых характеристик и модификаторов.
 	 * @return Фактическая потеря HP. Ноль означает отсутствие изменения.
-	 * @note После первого положительного результата сессия переходит в Fighting до уведомлений о здоровье.
+	 * @note Первый положительный урон переводит сессию в Fighting до уведомлений о здоровье.
+	 * Смертельный урон переводит сессию в ChangingEnemy после уведомления о здоровье.
 	 */
 	float ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, float ResolvedDamage);
 
@@ -143,7 +147,7 @@ private:
 	 * @brief Фаза сессии, от которой зависит допуск команды кликовой атаки.
 	 *
 	 * Начинается с Preparing, становится Ready после инициализации характеристик,
-	 * Fighting после первого урона и Leaving при Shutdown().
+	 * Fighting после первого урона, ChangingEnemy после смерти противника и Leaving при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
 
@@ -202,6 +206,14 @@ private:
 	void SpawnEnemy(UWorld& World, const ACombatArena& Arena);
 
 	/**
+	 * @brief Принимает смерть текущего противника и закрывает приём атак по нему.
+	 * @param[in] Source Компонент характеристик, опубликовавший OnDeath после обнуления HP.
+	 * @post Если сессия в Fighting и Source принадлежит текущей цели с нулевым HP,
+	 * сессия переходит в ChangingEnemy и отключает области клика цели.
+	 */
+	void HandleEnemyDeath(const UCombatAttributesComponent& Source);
+
+	/**
 	 * @brief Класс героя, полученный от GameMode в Initialize().
 	 *
 	 * Хранится до уничтожения сессии. Пустое значение останавливает спаун героя.
@@ -226,10 +238,10 @@ private:
 	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
 
 	/**
-	 * @brief Слабая ссылка на экземпляр противника, доступный как цель клика.
+	 * @brief Слабая ссылка на экземпляр противника в постоянном уровне.
 	 *
-	 * Появляется после успешного спауна и применения описания. Shutdown() очищает поле.
-	 * Пустая или недействительная ссылка означает, что актуальной цели нет.
+	 * Сессия записывает ссылку после спауна и оставляет её в ChangingEnemy для последующей замены.
+	 * Shutdown() снимает подписку на OnDeath и очищает поле.
 	 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACombatEnemy> Enemy;

@@ -57,6 +57,12 @@ public:
 	 */
 	UBoxComponent& GetMissArea() const;
 
+	/**
+	 * @brief Отключает обе области клика у погибшего противника.
+	 * @post HitArea и MissArea исключены из запросов коллизии. Модель остаётся в сцене.
+	 */
+	void DisableClickAreas();
+
 private:
 	/**
 	 * @brief Компонент характеристик, созданный конструктором на время жизни противника.

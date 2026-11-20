@@ -12,12 +12,13 @@
 #include "Combat/CombatGameMode.h"
 #include "Combat/CombatHero.h"
 #include "Combat/CombatSession.h"
+#include "Components/BoxComponent.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
-/** @brief Запускается системой автоматизации в игровом клиенте и проверяет контракт приёма клика. */
+/** @brief Проверяет допуск кликов, применение урона и завершение боя с текущей целью. */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCombatClickCommandTest, "Furward.Combat.ClickCommandValidation",
 	EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
 
@@ -141,9 +142,14 @@ bool FVerifyCombatClickCommands::Update()
 	Test->TestTrue(TEXT("Fighting accepts further clicks"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
 
-	// Избыточный урон снимает оставшиеся HP. Повторный удар по той же мёртвой цели отклоняется.
+	// Смертельный удар закрывает обе области цели. Повторная команда не меняет результат боя.
 	Test->TestEqual(TEXT("Lethal damage stops at the remaining health"),
 		Session->ApplyResolvedDamageToEnemy(Target, 200.0f), 60.0f);
+	Test->TestTrue(TEXT("Enemy death advances combat to ChangingEnemy"),
+		Session->GetPhase() == ECombatPhase::ChangingEnemy);
+	Test->TestTrue(TEXT("Dead enemy is no longer a click target"), Session->GetActiveEnemy() == nullptr);
+	Test->TestFalse(TEXT("Dead enemy hit area is disabled"), Target->GetHitArea().IsQueryCollisionEnabled());
+	Test->TestFalse(TEXT("Dead enemy miss area is disabled"), Target->GetMissArea().IsQueryCollisionEnabled());
 	Test->TestEqual(TEXT("Dead targets reject further damage"),
 		Session->ApplyResolvedDamageToEnemy(Target, 10.0f), 0.0f);
 	Test->TestFalse(TEXT("Dead targets reject further clicks"),

@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Создаёт компоненты противника и применяет модель и области клика из описания вида.
+ * @brief Настраивает модель и области клика противника и отключает области после смерти.
  */
 
 #include "Combat/CombatEnemy.h"
@@ -92,4 +92,10 @@ UBoxComponent& ACombatEnemy::GetHitArea() const
 UBoxComponent& ACombatEnemy::GetMissArea() const
 {
 	return *MissArea;
+}
+
+void ACombatEnemy::DisableClickAreas()
+{
+	HitArea->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MissArea->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
