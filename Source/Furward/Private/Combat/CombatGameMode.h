@@ -76,6 +76,16 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Stage", meta = (RowType = "/Script/Furward.CombatStageRow"))
 	FDataTableRowHandle InitialStage;
 
+#if WITH_EDITORONLY_DATA
+	/**
+	 * @brief Разрешает пробный бой в Play In Editor при явном включении в Class Defaults.
+	 *
+	 * Выключенный флаг оставляет сессию ждать начальных игровых данных.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|PIE", meta = (DisplayName = "Enable PIE Combat Preview"))
+	bool bEnablePIECombatPreview = false;
+#endif
+
 	/**
 	 * @brief Удерживающая ссылка на сессию от InitGame() до EndPlay().
 	 *

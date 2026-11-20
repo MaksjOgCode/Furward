@@ -68,6 +68,14 @@ public:
 	 */
 	void Initialize(TSubclassOf<ACombatHero> InHeroClass);
 
+#if WITH_EDITOR
+	/**
+	 * @brief Включает пробные характеристики и формулу урона для текущего запуска PIE.
+	 * @pre GameMode проверил тип мира и явное включение проверки до запроса этапа.
+	 */
+	void EnablePIECombatPreview();
+#endif
+
 	/**
 	 * @brief Читает начальный этап и запрашивает подгрузку его окружения.
 	 *
@@ -110,7 +118,7 @@ public:
 	 * @param[in] Result Результат трассировки. Запрос может содержать Hit или Miss.
 	 * @param[in] Target Тот же экземпляр противника, по которому выполнена трассировка.
 	 * @return true при готовой сцене, актуальной цели и активном игровом времени. Иначе false.
-	 * @note Лог Click attack accepted подтверждает проверку запроса.
+	 * @note В пробном бое PIE результат Hit проходит расчёт и применение урона.
 	 * @see ApplyResolvedDamageToEnemy
 	 */
 	bool TrySubmitClickAttack(ECombatClickResult Result, const ACombatEnemy* Target);
@@ -138,6 +146,11 @@ private:
 	 * Fighting после первого урона и Leaving при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
+
+#if WITH_EDITOR
+	/** @brief Разрешение на пробный бой, которое GameMode передаёт при входе в мир PIE. */
+	bool bPIECombatPreview = false;
+#endif
 
 	/**
 	 * @brief Повторно проверяет фазу, цель, участников и паузу перед боевой операцией.

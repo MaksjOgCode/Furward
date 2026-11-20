@@ -7,6 +7,7 @@
 
 #include "CombatGameMode.h"
 #include "CombatSession.h"
+#include "Engine/World.h"
 #include "UObject/UObjectGlobals.h"
 
 
@@ -31,6 +32,14 @@ void ACombatGameMode::BeginPlay() {
 	Super::BeginPlay();
 
 	UE_LOG(LogCombatGameMode, Display, TEXT("BeginPlay: %s"), *GetName());
+
+#if WITH_EDITOR
+	// Play In Editor должен быть выбран и как тип мира, и как режим проверки в Class Defaults.
+	if (bEnablePIECombatPreview && GetWorld()->WorldType == EWorldType::PIE)
+	{
+		CombatSession->EnablePIECombatPreview();
+	}
+#endif
 
 	// Сессия получает строку этапа и использует GameMode как контекст для загрузки окружения.
 	CombatSession->RequestInitialStage(this, InitialStage);

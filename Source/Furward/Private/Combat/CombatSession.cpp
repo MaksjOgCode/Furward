@@ -25,6 +25,13 @@ DEFINE_LOG_CATEGORY_STATIC( LogCombatSession, Log, All );
 
 
 
+#if WITH_EDITOR
+void UCombatSession::EnablePIECombatPreview()
+{
+	bPIECombatPreview = true;
+}
+#endif
+
 void UCombatSession::RequestInitialStage(UObject* WorldContextObject, const FDataTableRowHandle& StageHandle)
 {
 	// В Preparing допускаем один отслеживаемый запрос на начальное окружение.
@@ -124,9 +131,23 @@ void UCombatSession::HandleEnvironmentShown()
     SpawnHero(*World, *FoundArena);
     SpawnEnemy(*World, *FoundArena);
 
-    // Готовая расстановка остаётся в Preparing, пока сессия не получит характеристики обоих участников.
     if (Hero.IsValid() && Enemy.IsValid())
     {
+#if WITH_EDITOR
+        if (bPIECombatPreview)
+        {
+            // Согласованные числа проверки применяются к экземплярам после появления арены.
+            const FCombatBaseAttributes HeroBase{120.0f, 22.0f, 7.0f};
+            const FCombatBaseAttributes EnemyBase{85.0f, 12.0f, 4.0f};
+            if (InitializeParticipantAttributes(HeroBase, 70.0f, EnemyBase))
+            {
+                UE_LOG(LogCombatSession, Display, TEXT("PIE combat preview enabled."));
+                return;
+            }
+        }
+#endif
+
+        // Без начальных характеристик сцена остаётся в Preparing.
         UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; waiting for participant attributes."));
     }
 }
@@ -264,9 +285,18 @@ bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const AComb
 		return false;
 	}
 
-	// Журналируем результат проверки клика. Расчёт урона получает отдельный подтверждённый результат.
 	UE_LOG(LogCombatSession, Display, TEXT("Click attack accepted: %s; Target: %s"),
 		Result == ECombatClickResult::Hit ? TEXT("Hit") : TEXT("Miss"), *Target->GetName());
+
+#if WITH_EDITOR
+	// В режиме проверки только Hit применяет формулу. Броня может снизить результат до нуля.
+	if (bPIECombatPreview && Result == ECombatClickResult::Hit)
+	{
+		const float DamagePerHit = Hero->GetAttributes().GetBaseAttributes().DamagePerHit;
+		const float Armor = Target->GetAttributes().GetBaseAttributes().Armor;
+		ApplyResolvedDamageToEnemy(Target, FMath::Max(0.0f, DamagePerHit - Armor));
+	}
+#endif
 	return true;
 }
 
