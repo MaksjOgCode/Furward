@@ -12,7 +12,7 @@
 #include "CombatRulesDefinition.generated.h"
 
 /** @brief Определяет, когда активируется бой после замены противника. */
-UENUM()
+UENUM(BlueprintType)
 enum class ECombatNextEncounterStartRule : uint8
 {
 	/** @brief Выбор ещё не сделан. Сессия продолжает ждать в ChangingEnemy. */

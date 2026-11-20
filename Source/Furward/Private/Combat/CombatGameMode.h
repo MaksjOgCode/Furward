@@ -11,11 +11,13 @@
 #include "Engine/DataTable.h"
 #include "GameFramework/GameModeBase.h"
 #include "UObject/ObjectPtr.h"
+#include "UObject/SoftObjectPtr.h"
 #include "Templates/SubclassOf.h"
 #include "CombatGameMode.generated.h"
 
 
 
+class UCombatRulesDefinition;
 class UCombatSession;
 class ACombatHero;
 
@@ -25,7 +27,7 @@ class ACombatHero;
  * @brief Владеет одной UCombatSession на время посещения карты L_Combat.
  *
  * Unreal создаёт экземпляр BP_Combat_GameMode для игрового мира.
- * В Class Defaults задают класс героя и строку начального этапа.
+ * В Class Defaults задают класс героя, строку начального этапа и ассет боевых правил.
  */
 UCLASS()
 class ACombatGameMode : public AGameModeBase
@@ -53,7 +55,7 @@ protected:
 	/**
 	 * @brief Передаёт сессии начальный этап, когда Unreal запускает карту.
 	 *
-	 * Сессия читает строку таблицы. Лог Initial combat stage указывает выбранную строку и контент.
+	 * Сессия читает строку таблицы. Для включённой проверки PIE GameMode сперва загружает боевые правила.
 	 * @pre InitGame() создал CombatSession.
 	 * @see UCombatSession::RequestInitialStage
 	 */
@@ -75,6 +77,15 @@ private:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Stage", meta = (RowType = "/Script/Furward.CombatStageRow"))
 	FDataTableRowHandle InitialStage;
+
+	/**
+	 * @brief Ассет общих правил боя, доступный для замены в Class Defaults.
+	 *
+	 * Мягкая ссылка указывает на DA_Combat_Rules по умолчанию. Включённая проверка PIE загружает ассет перед запуском.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Rules")
+	TSoftObjectPtr<UCombatRulesDefinition> CombatRules{
+		FSoftObjectPath(TEXT("/Game/Combat-System/Data/DA_Combat_Rules.DA_Combat_Rules"))};
 
 #if WITH_EDITORONLY_DATA
 	/**

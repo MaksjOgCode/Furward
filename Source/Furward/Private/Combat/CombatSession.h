@@ -76,10 +76,11 @@ public:
 
 #if WITH_EDITOR
 	/**
-	 * @brief Включает пробные характеристики и формулу урона для текущего запуска PIE.
+	 * @brief Включает пробные характеристики, формулу урона и смену противника по настроенным правилам.
+	 * @param[in] InRules Загруженный GameMode ассет. При пустой ссылке пробный бой заканчивается в ChangingEnemy.
 	 * @pre GameMode проверил тип мира и явное включение проверки до запроса этапа.
 	 */
-	void EnablePIECombatPreview();
+	void EnablePIECombatPreview(UCombatRulesDefinition* InRules);
 #endif
 
 	/**
@@ -189,6 +190,19 @@ private:
 #if WITH_EDITOR
 	/** @brief Разрешение на пробный бой, которое GameMode передаёт при входе в мир PIE. */
 	bool bPIECombatPreview = false;
+
+	/**
+	 * @brief После обработки попадания готовит следующего пробного мутанта с полным HP.
+	 * @pre Пробный бой включён, публикация результата урона завершена.
+	 * @post После смерти и при заданном правиле сессия создаёт и активирует следующий экземпляр.
+	 */
+	void TryContinuePIECombatPreview();
+#endif
+
+#if WITH_EDITORONLY_DATA
+	/** @brief Загруженные правила, которые сессия удерживает до завершения проверки PIE. */
+	UPROPERTY(Transient)
+	TObjectPtr<UCombatRulesDefinition> PIECombatRules;
 #endif
 
 	/**

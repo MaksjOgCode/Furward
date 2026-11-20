@@ -27,9 +27,39 @@ DEFINE_LOG_CATEGORY_STATIC( LogCombatSession, Log, All );
 
 
 #if WITH_EDITOR
-void UCombatSession::EnablePIECombatPreview()
+void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
 {
 	bPIECombatPreview = true;
+	PIECombatRules = InRules;
+}
+
+void UCombatSession::TryContinuePIECombatPreview()
+{
+	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
+	const ACombatEnemy* DefeatedEnemy = Enemy.Get();
+	if (Phase != ECombatPhase::ChangingEnemy || !IsValid(Rules) || !DefeatedEnemy || !IsValid(InitialEnemy.Get()))
+	{
+		return;
+	}
+
+	const ECombatNextEncounterStartRule StartRule = Rules->NextEncounterStart;
+	if (StartRule != ECombatNextEncounterStartRule::OnFirstDamage && StartRule != ECombatNextEncounterStartRule::Automatic)
+	{
+		return;
+	}
+
+	const UWorld* World = DefeatedEnemy->GetWorld();
+	if (!World || World->IsPaused())
+	{
+		return;
+	}
+
+	// В пробном бою повторно используем описание и характеристики исходного мутанта.
+	const FCombatBaseAttributes EnemyBase = DefeatedEnemy->GetAttributes().GetBaseAttributes();
+	if (!PrepareNextEnemy(*InitialEnemy, EnemyBase) || !ActivatePreparedEncounter(EncounterID, *Rules))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("PIE combat preview could not activate the next encounter."));
+	}
 }
 #endif
 
@@ -377,12 +407,15 @@ bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const AComb
 		Result == ECombatClickResult::Hit ? TEXT("Hit") : TEXT("Miss"), *Target->GetName());
 
 #if WITH_EDITOR
-	// В режиме проверки только Hit применяет формулу. Броня может снизить результат до нуля.
+	// В режиме проверки только Hit применяет формулу. Смена цели ждёт завершения публикации урона и смерти.
 	if (bPIECombatPreview && Result == ECombatClickResult::Hit)
 	{
 		const float DamagePerHit = Hero->GetAttributes().GetBaseAttributes().DamagePerHit;
 		const float Armor = Target->GetAttributes().GetBaseAttributes().Armor;
-		ApplyResolvedDamageToEnemy(Target, FMath::Max(0.0f, DamagePerHit - Armor));
+		if (ApplyResolvedDamageToEnemy(Target, FMath::Max(0.0f, DamagePerHit - Armor)) > 0.0f)
+		{
+			TryContinuePIECombatPreview();
+		}
 	}
 #endif
 	return true;
@@ -505,6 +538,10 @@ void UCombatSession::Shutdown() {
 	EncounterResult.Reset();
 	InitialEnemy = nullptr;
 	ActiveArena.Reset();
+
+#if WITH_EDITORONLY_DATA
+	PIECombatRules = nullptr;
+#endif
 
 	// Расцепляем динамическую подписку до запроса выгрузки, чтобы OnLevelShown больше не готовил сцену.
 	if ( IsValid(EnvironmentStreaming.Get()) ) {

@@ -6,6 +6,7 @@
  */
 
 #include "CombatGameMode.h"
+#include "CombatRulesDefinition.h"
 #include "CombatSession.h"
 #include "Engine/World.h"
 #include "UObject/UObjectGlobals.h"
@@ -37,7 +38,7 @@ void ACombatGameMode::BeginPlay() {
 	// Play In Editor должен быть выбран и как тип мира, и как режим проверки в Class Defaults.
 	if (bEnablePIECombatPreview && GetWorld()->WorldType == EWorldType::PIE)
 	{
-		CombatSession->EnablePIECombatPreview();
+		CombatSession->EnablePIECombatPreview(CombatRules.LoadSynchronous());
 	}
 #endif
 
