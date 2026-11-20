@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет инициализацию участников на L_Combat и допуск запросов кликовой атаки.
+ * @brief Проверяет на L_Combat подготовку сцены, допуск атаки и старт боя после урона.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -90,6 +90,8 @@ bool FVerifyCombatClickCommands::Update()
 		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
 	Test->TestTrue(TEXT("Ready accepts Miss for the active enemy"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Miss, Target));
+	Test->TestEqual(TEXT("Miss leaves the enemy at its starting health"), EnemyAttributes.GetCurrentHealth(), EnemyBase.MaxHealth);
+	Test->TestTrue(TEXT("Miss leaves the combat phase Ready"), Session->GetPhase() == ECombatPhase::Ready);
 	Test->TestFalse(TEXT("Ignore is not a combat command"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Ignore, Target));
 	Test->TestFalse(TEXT("A missing target is rejected"),
@@ -103,6 +105,8 @@ bool FVerifyCombatClickCommands::Update()
 			Session->TrySubmitClickAttack(ECombatClickResult::Hit, OtherEnemy));
 		Test->TestFalse(TEXT("Miss for a different enemy is rejected"),
 			Session->TrySubmitClickAttack(ECombatClickResult::Miss, OtherEnemy));
+		Test->TestEqual(TEXT("Resolved damage is rejected for a different enemy"),
+			Session->ApplyResolvedDamageToEnemy(OtherEnemy, 25.0f), 0.0f);
 		// Убираем созданного тестом противника перед завершением проверки.
 		OtherEnemy->Destroy();
 	}
@@ -111,6 +115,43 @@ bool FVerifyCombatClickCommands::Update()
 	UCombatSession* PreparingSession = NewObject<UCombatSession>(GameMode);
 	Test->TestFalse(TEXT("Preparing rejects combat commands"),
 		PreparingSession->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
+	Test->TestEqual(TEXT("Preparing rejects resolved damage"),
+		PreparingSession->ApplyResolvedDamageToEnemy(Target, 25.0f), 0.0f);
+
+	// Неэффективный удар не запускает бой. Подписчики результативного удара сразу видят Fighting.
+	Test->TestEqual(TEXT("Zero resolved damage is rejected"),
+		Session->ApplyResolvedDamageToEnemy(Target, 0.0f), 0.0f);
+	Test->TestTrue(TEXT("Zero damage leaves combat Ready"), Session->GetPhase() == ECombatPhase::Ready);
+	int32 HealthEventCount = 0;
+	const FDelegateHandle DamageHandle = EnemyAttributes.OnHealthChanged().AddLambda(
+		[Test = Test, Session, &HealthEventCount](float, float)
+		{
+			++HealthEventCount;
+			Test->TestTrue(TEXT("Health observers see the Fighting phase"),
+				Session->GetPhase() == ECombatPhase::Fighting);
+		});
+	int32 DeathEventCount = 0;
+	const FDelegateHandle DeathHandle = EnemyAttributes.OnDeath().AddLambda(
+		[&DeathEventCount](const UCombatAttributesComponent&) { ++DeathEventCount; });
+
+	Test->TestEqual(TEXT("First positive damage is applied"),
+		Session->ApplyResolvedDamageToEnemy(Target, 25.0f), 25.0f);
+	Test->TestTrue(TEXT("First positive damage starts combat"), Session->GetPhase() == ECombatPhase::Fighting);
+	Test->TestEqual(TEXT("Enemy loses the applied HP"), EnemyAttributes.GetCurrentHealth(), 60.0f);
+	Test->TestTrue(TEXT("Fighting accepts further clicks"),
+		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
+
+	// Избыточный урон снимает оставшиеся HP. Повторный удар по той же мёртвой цели отклоняется.
+	Test->TestEqual(TEXT("Lethal damage stops at the remaining health"),
+		Session->ApplyResolvedDamageToEnemy(Target, 200.0f), 60.0f);
+	Test->TestEqual(TEXT("Dead targets reject further damage"),
+		Session->ApplyResolvedDamageToEnemy(Target, 10.0f), 0.0f);
+	Test->TestFalse(TEXT("Dead targets reject further clicks"),
+		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
+	Test->TestEqual(TEXT("Two health changes are published"), HealthEventCount, 2);
+	Test->TestEqual(TEXT("Death is published once"), DeathEventCount, 1);
+	EnemyAttributes.OnHealthChanged().Remove(DamageHandle);
+	EnemyAttributes.OnDeath().Remove(DeathHandle);
 
 	return true;
 }

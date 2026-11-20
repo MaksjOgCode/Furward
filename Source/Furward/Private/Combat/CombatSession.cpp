@@ -259,18 +259,61 @@ bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const AComb
 		return false;
 	}
 
-	// Перепроверяем сцену в момент запроса. Запрос отклоняется, если герой или арена исчезли либо подуровень скрыт.
-	if (Phase != ECombatPhase::Ready || !Hero.IsValid() || !ActiveArena.IsValid() ||
+	if (!CanAttackEnemy(Target))
+	{
+		return false;
+	}
+
+	// Журналируем результат проверки клика. Расчёт урона получает отдельный подтверждённый результат.
+	UE_LOG(LogCombatSession, Display, TEXT("Click attack accepted: %s; Target: %s"),
+		Result == ECombatClickResult::Hit ? TEXT("Hit") : TEXT("Miss"), *Target->GetName());
+	return true;
+}
+
+float UCombatSession::ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, float ResolvedDamage)
+{
+	// Проверяем актуальность результата непосредственно перед изменением HP.
+	if (!CanAttackEnemy(Target))
+	{
+		return 0.0f;
+	}
+
+	UCombatAttributesComponent& Attributes = Target->GetAttributes();
+	const float PreviousHealth = Attributes.GetCurrentHealth();
+	const float AppliedDamage = Attributes.ReduceHealth(ResolvedDamage);
+	if (AppliedDamage <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	// Для первого эффективного удара фиксируем Fighting до уведомлений, включая уведомление о смерти.
+	if (Phase == ECombatPhase::Ready)
+	{
+		Phase = ECombatPhase::Fighting;
+		UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Fighting"));
+	}
+
+	UE_LOG(LogCombatSession, Display, TEXT("Damage applied: %.2f; Target: %s; HP: %.2f/%.2f"),
+		AppliedDamage, *Target->GetName(), Attributes.GetCurrentHealth(), Attributes.GetMaxHealth());
+	Attributes.PublishDamage(PreviousHealth);
+	return AppliedDamage;
+}
+
+bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
+{
+	// Перепроверяем сцену в момент запроса. Она должна оставаться доступной во время Ready и Fighting.
+	const bool bCanFight = Phase == ECombatPhase::Ready || Phase == ECombatPhase::Fighting;
+	if (!bCanFight || !Hero.IsValid() || !ActiveArena.IsValid() ||
 		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
 	{
-		UE_LOG(LogCombatSession, Verbose, TEXT("Click attack rejected: combat scene is not ready."));
+		UE_LOG(LogCombatSession, Verbose, TEXT("Combat attack rejected: combat scene is not ready."));
 		return false;
 	}
 
 	// Сравниваем экземпляры, чтобы результат по прошлой цели не применился к новой.
 	if (!IsValid(Target) || Target != Enemy.Get())
 	{
-		UE_LOG(LogCombatSession, Verbose, TEXT("Click attack rejected: target is not the active enemy."));
+		UE_LOG(LogCombatSession, Verbose, TEXT("Combat attack rejected: target is not the active enemy."));
 		return false;
 	}
 
@@ -284,13 +327,10 @@ bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const AComb
 	const UWorld* World = Target->GetWorld();
 	if (!World || World->IsPaused())
 	{
-		UE_LOG(LogCombatSession, Verbose, TEXT("Click attack rejected: gameplay input is suspended."));
+		UE_LOG(LogCombatSession, Verbose, TEXT("Combat attack rejected: gameplay input is suspended."));
 		return false;
 	}
 
-	// Журналируем принятый запрос с именем цели. На этом шаге здоровье и фаза остаются прежними.
-	UE_LOG(LogCombatSession, Display, TEXT("Click attack accepted: %s; Target: %s"),
-		Result == ECombatClickResult::Hit ? TEXT("Hit") : TEXT("Miss"), *Target->GetName());
 	return true;
 }
 

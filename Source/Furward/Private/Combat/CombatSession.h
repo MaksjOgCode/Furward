@@ -34,13 +34,15 @@ enum class ECombatClickResult : uint8
 	Ignore
 };
 
-/** @brief Определяет, на каком этапе подготовки или завершения находится сессия. */
+/** @brief Определяет, на каком этапе подготовки, боя или завершения находится сессия. */
 enum class ECombatPhase : uint8
 {
 	/** @brief Сцена, участники или их характеристики ещё не готовы к приёму команд. */
 	Preparing,
 	/** @brief Окружение показано, участники созданы и получили начальные характеристики. */
 	Ready,
+	/** @brief По текущему противнику уже применён первый положительный урон. */
+	Fighting,
 	/** @brief Сессия блокирует команды и освобождает ссылки при завершении. */
 	Leaving
 };
@@ -108,17 +110,41 @@ public:
 	 * @param[in] Result Результат трассировки. Запрос может содержать Hit или Miss.
 	 * @param[in] Target Тот же экземпляр противника, по которому выполнена трассировка.
 	 * @return true при готовой сцене, актуальной цели и активном игровом времени. Иначе false.
-	 * @note Лог Click attack accepted подтверждает валидацию. Здоровье и фаза боя здесь не меняются.
+	 * @note Лог Click attack accepted подтверждает проверку запроса.
+	 * @see ApplyResolvedDamageToEnemy
 	 */
 	bool TrySubmitClickAttack(ECombatClickResult Result, const ACombatEnemy* Target);
+
+	/**
+	 * @brief Применяет рассчитанный урон по актуальному противнику.
+	 * @param[in] Target Противник, для которого рассчитан урон.
+	 * @param[in] ResolvedDamage Урон после учёта игровых характеристик и модификаторов.
+	 * @return Фактическая потеря HP. Ноль означает отсутствие изменения.
+	 * @note После первого положительного результата сессия переходит в Fighting до уведомлений о здоровье.
+	 */
+	float ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, float ResolvedDamage);
+
+	/**
+	 * @brief Даёт вызывающему коду фазу текущей сессии.
+	 * @return Фаза подготовки, боя или завершения.
+	 */
+	ECombatPhase GetPhase() const { return Phase; }
 
 private:
 	/**
 	 * @brief Фаза сессии, от которой зависит допуск команды кликовой атаки.
 	 *
-	 * Начинается с Preparing, становится Ready после инициализации характеристик и Leaving при Shutdown().
+	 * Начинается с Preparing, становится Ready после инициализации характеристик,
+	 * Fighting после первого урона и Leaving при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
+
+	/**
+	 * @brief Повторно проверяет фазу, цель, участников и паузу перед боевой операцией.
+	 * @param[in] Target Экземпляр, на который направлена операция.
+	 * @return true, если живой противник остаётся актуальной целью в готовой сцене.
+	 */
+	bool CanAttackEnemy(const ACombatEnemy* Target) const;
 
 	/**
 	 * @brief Принимает уведомление OnLevelShown и создаёт участников показанного окружения.

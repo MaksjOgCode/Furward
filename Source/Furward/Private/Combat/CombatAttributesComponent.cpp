@@ -43,6 +43,17 @@ void UCombatAttributesComponent::PublishInitialHealth()
 
 float UCombatAttributesComponent::ApplyDamage(float Damage)
 {
+	const float PreviousHealth = CurrentHealth;
+	const float AppliedDamage = ReduceHealth(Damage);
+	if (AppliedDamage > 0.0f)
+	{
+		PublishDamage(PreviousHealth);
+	}
+	return AppliedDamage;
+}
+
+float UCombatAttributesComponent::ReduceHealth(float Damage)
+{
 	// Только живой участник с готовым здоровьем может потерять HP.
 	if (CurrentHealth <= 0.0f || !FMath::IsFinite(Damage) || Damage <= 0.0f)
 	{
@@ -52,12 +63,11 @@ float UCombatAttributesComponent::ApplyDamage(float Damage)
 	// Ограничиваем потерю оставшимся здоровьем и вычисляем фактическое изменение.
 	const float PreviousHealth = CurrentHealth;
 	CurrentHealth = FMath::Max(0.0f, PreviousHealth - Damage);
-	const float AppliedDamage = PreviousHealth - CurrentHealth;
-	if (AppliedDamage <= 0.0f)
-	{
-		return 0.0f;
-	}
+	return PreviousHealth - CurrentHealth;
+}
 
+void UCombatAttributesComponent::PublishDamage(float PreviousHealth)
+{
 	// Запоминаем результат этого изменения до вызова подписчиков. Повторный удар по нулю будет отклонён.
 	const bool bDied = IsDead();
 	HealthChanged.Broadcast(PreviousHealth, CurrentHealth);
@@ -65,5 +75,4 @@ float UCombatAttributesComponent::ApplyDamage(float Damage)
 	{
 		Death.Broadcast(*this);
 	}
-	return AppliedDamage;
 }
