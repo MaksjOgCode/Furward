@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Готовит обычные и боссовые столкновения, обрабатывает атаки и передаёт зачистку профилю.
+ * @brief Готовит столкновения, обрабатывает атаки, зачистку и завершение этапа после победы над боссом.
  */
 
 #include "Combat/CombatSession.h"
@@ -49,14 +49,8 @@ void UCombatSession::TryContinuePIECombatPreview()
 		return;
 	}
 
-	if (EncounterResult.GetValue().bDefeatedBoss)
-	{
-		UE_LOG(LogCombatSession, Display, TEXT("PIE boss defeat recorded: %s"), *ActiveStageID.ToString());
-		return;
-	}
-
 	// Зачитываем победу в профиле до решения о создании следующего противника.
-	UFurwardProfileSubsystem* Profile = GetPIEProfile();
+	UFurwardProfileSubsystem* Profile = GetProfile();
 	if (!Profile || !Profile->TryRecordExpeditionClear(ActiveStageID, EncounterResult.GetValue().EncounterID))
 	{
 		return;
@@ -99,14 +93,6 @@ void UCombatSession::TryContinuePIECombatPreview()
 	{
 		UE_LOG(LogCombatSession, Display, TEXT("PIE expedition boss activated: %s"), *ActiveStageID.ToString());
 	}
-}
-
-UFurwardProfileSubsystem* UCombatSession::GetPIEProfile() const
-{
-	const UWorld* World = GetOuter()->GetWorld();
-	return bPIECombatPreview && World
-		? UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(World->GetGameInstance())
-		: nullptr;
 }
 
 const UCombatEnemyDefinition* UCombatSession::SelectPIEEnemyDefinition(bool bBossPending) const
@@ -282,14 +268,18 @@ void UCombatSession::HandleEnvironmentShown()
         return;
     }
 
-    // Переключаем камеру и создаём участников по точкам арены на постоянном уровне.
     Controller->UseArenaCamera(FoundArena);
-    SpawnHero(*World, *FoundArena);
 
     const UCombatEnemyDefinition* StartingDefinition = InitialEnemy.Get();
 #if WITH_EDITOR
-    if (const UFurwardProfileSubsystem* Profile = GetPIEProfile();
-        Profile && Profile->IsExpeditionClearComplete(ActiveStageID))
+    const UFurwardProfileSubsystem* Profile = bPIECombatPreview ? GetProfile() : nullptr;
+    if (Profile && Profile->IsExpeditionStageCompleted(ActiveStageID))
+    {
+        EnterStageCompleted();
+        return;
+    }
+
+    if (Profile && Profile->IsExpeditionClearComplete(ActiveStageID))
     {
         StartingDefinition = SelectPIEEnemyDefinition(true);
         if (!StartingDefinition)
@@ -301,6 +291,8 @@ void UCombatSession::HandleEnvironmentShown()
     }
 #endif
 
+    // Создаём участников по точкам арены на постоянном уровне, когда выбран следующий бой.
+    SpawnHero(*World, *FoundArena);
     if (IsValid(StartingDefinition))
     {
         if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *StartingDefinition))
@@ -424,7 +416,7 @@ void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
 
 const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 {
-	if (Phase == ECombatPhase::ChangingEnemy || Phase == ECombatPhase::Defeated)
+	if (Phase == ECombatPhase::ChangingEnemy || Phase == ECombatPhase::Defeated || Phase == ECombatPhase::StageCompleted)
 	{
 		return nullptr;
 	}
@@ -601,6 +593,18 @@ void UCombatSession::EnterFighting()
 #endif
 }
 
+void UCombatSession::EnterStageCompleted()
+{
+	Phase = ECombatPhase::StageCompleted;
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: StageCompleted; Stage: %s"), *ActiveStageID.ToString());
+}
+
+UFurwardProfileSubsystem* UCombatSession::GetProfile() const
+{
+	const UWorld* World = GetOuter()->GetWorld();
+	return World ? UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(World->GetGameInstance()) : nullptr;
+}
+
 void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 {
 	ACombatEnemy* CurrentEnemy = Enemy.Get();
@@ -610,8 +614,7 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 		return;
 	}
 
-	// Сначала закрываем приём атак, пока актор и его модель остаются в постоянном уровне.
-	Phase = ECombatPhase::ChangingEnemy;
+	// Сначала останавливаем атаки и отключаем области клика погибшей цели.
 #if WITH_EDITOR
 	StopPIEEnemyAttacks();
 #endif
@@ -620,9 +623,24 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	// Фиксируем исход по идентификатору столкновения и типу контента. Актор может быть удалён при замене.
 	EncounterResult = FCombatEncounterResult{EncounterID, EnemyDefinitionID, bCurrentEnemyIsBoss};
 	UE_LOG(LogCombatSession, Display, TEXT("Combat enemy defeated: %s"), *CurrentEnemy->GetName());
-	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: ChangingEnemy"));
 	UE_LOG(LogCombatSession, Display, TEXT("Combat encounter result recorded: %s; Enemy definition: %s"),
 		*EncounterID.ToString(EGuidFormats::DigitsWithHyphens), *EnemyDefinitionID.ToString());
+
+	if (!EncounterResult.GetValue().bDefeatedBoss)
+	{
+		Phase = ECombatPhase::ChangingEnemy;
+		UE_LOG(LogCombatSession, Display, TEXT("Combat phase: ChangingEnemy"));
+		return;
+	}
+
+	UFurwardProfileSubsystem* Profile = GetProfile();
+	if (!Profile || !Profile->TryCompleteExpeditionStage(ActiveStageID, EncounterResult.GetValue().EncounterID))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Boss result could not complete expedition stage %s."), *ActiveStageID.ToString());
+		return;
+	}
+
+	EnterStageCompleted();
 }
 
 void UCombatSession::HandleHeroDeath(const UCombatAttributesComponent& Source)

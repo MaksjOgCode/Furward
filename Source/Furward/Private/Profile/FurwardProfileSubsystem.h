@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает хранение зачистки экспедиции и учёт побед по идентификатору столкновения.
+ * @brief Описывает зачистку и завершение этапов экспедиции в профиле.
  */
 
 #pragma once
@@ -12,7 +12,7 @@
 #include "FurwardProfileSubsystem.generated.h"
 
 /**
- * @brief Владеет прогрессом зачистки на время работы GameInstance.
+ * @brief Владеет зачисткой и завершёнными этапами на время работы GameInstance.
  *
  * Unreal создаёт экземпляр автоматически. Он хранит значения между сменами карты и боевой сессии.
  * Боевой код передаёт подтверждённый EncounterID и имя строки этапа.
@@ -49,9 +49,36 @@ public:
 	 */
 	bool IsExpeditionClearComplete(FName StageID) const;
 
+	/**
+	 * @brief Учитывает победу над боссом после полной зачистки этапа.
+	 * @param[in] StageID Имя строки этапа, на котором побеждён босс.
+	 * @param[in] EncounterID Уникальный идентификатор столкновения с боссом.
+	 * @return true, если этап впервые отмечен завершённым. Неполная зачистка, неверные данные и дубликаты дают false.
+	 * @post При успехе профиль хранит завершённый этап и EncounterID. Зачистка остаётся на 10/10.
+	 */
+	bool TryCompleteExpeditionStage(FName StageID, const FGuid& EncounterID);
+
+	/**
+	 * @brief Проверяет, засчитана ли победа над боссом этапа.
+	 * @param[in] StageID Имя строки боевого этапа.
+	 * @return true после применения результата победы над боссом.
+	 */
+	bool IsExpeditionStageCompleted(FName StageID) const;
+
 private:
+	/**
+	 * @brief Проверяет идентификаторы этапа и победы перед изменением профиля.
+	 * @param[in] StageID Имя строки этапа.
+	 * @param[in] EncounterID Идентификатор столкновения.
+	 * @return true, если оба идентификатора заданы и профиль ещё не засчитал столкновение.
+	 */
+	bool CanRecordEncounter(FName StageID, const FGuid& EncounterID) const;
+
 	/** @brief Число учтённых побед по имени строки каждого боевого этапа. */
 	TMap<FName, int32> ExpeditionClearsByStage;
+
+	/** @brief Имена строк этапов, боссы которых побеждены. */
+	TSet<FName> CompletedExpeditionStages;
 
 	/** @brief Идентификаторы побед, уже зачтённых этим экземпляром профиля. */
 	TSet<FGuid> RecordedEncounterIDs;

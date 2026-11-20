@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет однократный учёт побед, независимость этапов и порог зачистки.
+ * @brief Проверяет учёт побед, порог зачистки и завершение этапа после босса.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -22,6 +22,7 @@ bool FFurwardExpeditionClearTest::RunTest(const FString& Parameters)
 	const FName FirstStage(TEXT("Stage_01"));
 	const FName SecondStage(TEXT("Stage_02"));
 	const FGuid FirstEncounterID = FGuid::NewGuid();
+	const FGuid BossEncounterID = FGuid::NewGuid();
 
 	TestEqual(TEXT("A new stage starts at zero clears"), Profile->GetExpeditionClearCount(FirstStage), 0);
 	TestFalse(TEXT("An invalid encounter ID is rejected"), Profile->TryRecordExpeditionClear(FirstStage, FGuid()));
@@ -40,11 +41,29 @@ bool FFurwardExpeditionClearTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("The stage reaches nine clears"), Profile->GetExpeditionClearCount(FirstStage), 9);
 	TestFalse(TEXT("Nine victories are below the boss threshold"), Profile->IsExpeditionClearComplete(FirstStage));
+	TestFalse(TEXT("A boss victory requires the complete ordinary clear"),
+		Profile->TryCompleteExpeditionStage(FirstStage, BossEncounterID));
+	TestFalse(TEXT("An early boss result leaves the stage unfinished"), Profile->IsExpeditionStageCompleted(FirstStage));
 	TestTrue(TEXT("The tenth distinct victory counts"), Profile->TryRecordExpeditionClear(FirstStage, FGuid::NewGuid()));
 	TestTrue(TEXT("Ten victories complete the ordinary clear"), Profile->IsExpeditionClearComplete(FirstStage));
 	TestFalse(TEXT("Further ordinary victories cannot overfill the stage"),
 		Profile->TryRecordExpeditionClear(FirstStage, FGuid::NewGuid()));
 	TestEqual(TEXT("The completed stage remains at ten clears"), Profile->GetExpeditionClearCount(FirstStage), 10);
+	TestFalse(TEXT("Ten ordinary clears alone leave the stage unfinished"), Profile->IsExpeditionStageCompleted(FirstStage));
+	TestFalse(TEXT("A boss result requires a valid encounter ID"), Profile->TryCompleteExpeditionStage(FirstStage, FGuid()));
+	TestFalse(TEXT("An ordinary encounter ID cannot be used for boss completion"),
+		Profile->TryCompleteExpeditionStage(FirstStage, FirstEncounterID));
+	TestTrue(TEXT("A valid boss result completes the stage after ten clears"),
+		Profile->TryCompleteExpeditionStage(FirstStage, BossEncounterID));
+	TestTrue(TEXT("The profile remembers the completed stage"), Profile->IsExpeditionStageCompleted(FirstStage));
+	TestEqual(TEXT("Boss completion preserves the ordinary clear"), Profile->GetExpeditionClearCount(FirstStage), 10);
+	TestFalse(TEXT("Replaying the boss result does not apply it twice"),
+		Profile->TryCompleteExpeditionStage(FirstStage, BossEncounterID));
+	TestFalse(TEXT("A new encounter cannot complete an already completed stage"),
+		Profile->TryCompleteExpeditionStage(FirstStage, FGuid::NewGuid()));
+	TestFalse(TEXT("An applied boss result cannot count as an ordinary victory on another stage"),
+		Profile->TryRecordExpeditionClear(SecondStage, BossEncounterID));
+	TestFalse(TEXT("Boss completion applies only to its own stage"), Profile->IsExpeditionStageCompleted(SecondStage));
 	TestTrue(TEXT("Another stage still accepts a victory"), Profile->TryRecordExpeditionClear(SecondStage, FGuid::NewGuid()));
 	TestEqual(TEXT("The second stage has its own count"), Profile->GetExpeditionClearCount(SecondStage), 1);
 
