@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подключает ввод и камеру, передаёт сессии команды и публикует готовность к выходу из боя.
+ * @brief Подключает ввод, камеру и интерфейс, передаёт сессии команды и публикует готовность к выходу из боя.
  */
 
 #include "Combat/CombatPlayerController.h"
@@ -10,6 +10,7 @@
 #include "Combat/CombatEnemy.h"
 #include "Combat/CombatGameMode.h"
 #include "Combat/CombatSession.h"
+#include "Combat/CombatRootWidget.h"
 #include "CollisionQueryParams.h"
 #include "Components/BoxComponent.h"
 #include "EnhancedInputComponent.h"
@@ -62,6 +63,7 @@ bool ACombatPlayerController::RequestExitCombat(FName SaveSlot)
 
 void ACombatPlayerController::NotifyCombatExitReady()
 {
+	RemoveCombatWidget();
 	UE_LOG(LogCombatPlayerController, Display, TEXT("Combat exit ready: %s"), *GetName());
 	OnCombatExitReady.Broadcast();
 }
@@ -82,8 +84,38 @@ void ACombatPlayerController::BeginPlay() {
 	InputMode.SetHideCursorDuringCapture(false);
 	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 	SetInputMode(InputMode);
+	AddCombatWidget();
 
 	UE_LOG(LogCombatPlayerController, Log, TEXT("Begin: %s"), *GetName() );
+}
+
+void ACombatPlayerController::AddCombatWidget()
+{
+	UCombatSession* Session = GetActiveCombatSession();
+	if (!IsLocalController() || !CombatRootWidgetClass || !Session || CombatWidget)
+	{
+		return;
+	}
+
+	CombatWidget = CreateWidget<UCombatRootWidget>(this, CombatRootWidgetClass);
+	if (!CombatWidget || !CombatWidget->ObserveSession(*Session) || !CombatWidget->AddToPlayerScreen())
+	{
+		RemoveCombatWidget();
+		UE_LOG(LogCombatPlayerController, Warning, TEXT("Could not initialize combat HUD."));
+		return;
+	}
+
+	UE_LOG(LogCombatPlayerController, Display, TEXT("Combat HUD added: %s"), *CombatWidget->GetName());
+}
+
+void ACombatPlayerController::RemoveCombatWidget()
+{
+	if (CombatWidget)
+	{
+		CombatWidget->StopObservingSession();
+		CombatWidget->RemoveFromParent();
+		CombatWidget = nullptr;
+	}
 }
 
 void ACombatPlayerController::SetupInputComponent()
@@ -163,6 +195,7 @@ ECombatClickResult ACombatPlayerController::ClassifyCombatClick(const ACombatEne
 }
 
 void ACombatPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason) {
+	RemoveCombatWidget();
 	// Снимаем контекст только из той подсистемы, куда его добавили. Запись в логе подтверждает снятие.
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = CombatInputSubsystem.Get())
 	{

@@ -15,6 +15,7 @@
 
 class ACombatArena;
 class ACombatEnemy;
+class UCombatRootWidget;
 class UCombatSession;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputAction;
@@ -29,7 +30,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCombatExitReady);
 /**
  * @brief Обрабатывает ввод локального игрока на L_Combat.
  *
- * Unreal создаёт BP_Combat_PlayerController по настройкам GameMode.
+ * Unreal создаёт BP_Combat_PlayerController по настройкам GameMode. Локальный контроллер создаёт корневой HUD.
  * Контроллер существует в игровом мире до выхода с карты и использует боевой контекст локального игрока.
  */
 UCLASS()
@@ -95,6 +96,20 @@ protected:
 private:
 	/** @brief Получает сессию из GameMode текущего мира для передачи боевой команды. */
 	UCombatSession* GetActiveCombatSession() const;
+
+	/** @brief Создаёт корневой HUD в области локального игрока и связывает его с сессией. */
+	void AddCombatWidget();
+
+	/** @brief Отсоединяет виджет от сессии и удаляет его с экрана. */
+	void RemoveCombatWidget();
+
+	/** @brief Класс WBP_Root_Combat из Class Defaults боевого контроллера. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|UI")
+	TSubclassOf<UCombatRootWidget> CombatRootWidgetClass;
+
+	/** @brief Экземпляр HUD на время входа в L_Combat. */
+	UPROPERTY(Transient)
+	TObjectPtr<UCombatRootWidget> CombatWidget;
 
 	/**
 	 * @brief Преобразует начало IA_Combat_Click в запрос к текущей сессии.

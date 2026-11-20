@@ -238,8 +238,10 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 			return;
 		}
 		Attributes.OnDeath().RemoveAll(this);
+		Attributes.OnHealthChanged().RemoveAll(this);
 	}
 	Enemy.Reset();
+	ParticipantHealthChanged.Broadcast();
 	EncounterID.Invalidate();
 	EnemyDefinitionID = FPrimaryAssetId();
 	EncounterResult.Reset();
@@ -640,7 +642,9 @@ void UCombatSession::SpawnHero(UWorld& World, const ACombatArena& Arena)
 
 	// Храним слабую ссылку. В логе указываем экземпляр и пакет уровня для проверки размещения.
 	Hero = SpawnedHero;
-	SpawnedHero->GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleHeroDeath);
+	UCombatAttributesComponent& HeroAttributes = SpawnedHero->GetAttributes();
+	HeroAttributes.OnDeath().AddUObject(this, &UCombatSession::HandleHeroDeath);
+	HeroAttributes.OnHealthChanged().AddUObject(this, &UCombatSession::HandleParticipantHealthChanged);
 
 	UE_LOG(LogCombatSession, Display, TEXT("Hero spawned: %s in %s"),
 		*SpawnedHero->GetName(), *SpawnedHero->GetLevel()->GetOutermost()->GetName());
@@ -692,7 +696,9 @@ void UCombatSession::RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnem
 	EnemyDefinitionID = Definition.GetPrimaryAssetId();
 	bCurrentEnemyIsBoss = BossEnemy.Get() == &Definition && InitialEnemy.Get() != &Definition;
 	EncounterResult.Reset();
-	SpawnedEnemy.GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+	UCombatAttributesComponent& EnemyAttributes = SpawnedEnemy.GetAttributes();
+	EnemyAttributes.OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+	EnemyAttributes.OnHealthChanged().AddUObject(this, &UCombatSession::HandleParticipantHealthChanged);
 }
 
 void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
@@ -710,6 +716,33 @@ const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 
 	const ACombatEnemy* CurrentEnemy = Enemy.Get();
 	return CurrentEnemy && !CurrentEnemy->GetAttributes().IsDead() ? CurrentEnemy : nullptr;
+}
+
+FCombatParticipantHealth UCombatSession::GetHeroHealthForDisplay() const
+{
+	const ACombatHero* CurrentHero = Hero.Get();
+	if (CurrentHero)
+	{
+		const UCombatAttributesComponent& Attributes = CurrentHero->GetAttributes();
+		return {Attributes.GetCurrentHealth(), Attributes.GetMaxHealth()};
+	}
+	return {};
+}
+
+FCombatParticipantHealth UCombatSession::GetEnemyHealthForDisplay() const
+{
+	const ACombatEnemy* CurrentEnemy = Enemy.Get();
+	if (CurrentEnemy)
+	{
+		const UCombatAttributesComponent& Attributes = CurrentEnemy->GetAttributes();
+		return {Attributes.GetCurrentHealth(), Attributes.GetMaxHealth()};
+	}
+	return {};
+}
+
+void UCombatSession::HandleParticipantHealthChanged(float /*Previous*/, float /*Current*/)
+{
+	ParticipantHealthChanged.Broadcast();
 }
 
 bool UCombatSession::InitializeParticipantAttributes(const FCombatBaseAttributes& HeroBase, float HeroCurrentHealth,
@@ -787,6 +820,7 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 	}
 	// Destroy удаляет актора из мира, а его UObject и компоненты освобождает сборщик мусора.
 	PreviousAttributes.OnDeath().RemoveAll(this);
+	PreviousAttributes.OnHealthChanged().RemoveAll(this);
 	NextAttributes.SetInitialAttributes(EnemyBase, EnemyBase.MaxHealth);
 	RegisterEnemy(*NextEnemy, Definition);
 
@@ -1029,15 +1063,21 @@ void UCombatSession::Shutdown()
 #endif
 	if (ACombatHero* CurrentHero = Hero.Get())
 	{
-		CurrentHero->GetAttributes().OnDeath().RemoveAll(this);
+		UCombatAttributesComponent& Attributes = CurrentHero->GetAttributes();
+		Attributes.OnDeath().RemoveAll(this);
+		Attributes.OnHealthChanged().RemoveAll(this);
 	}
 	if (ACombatEnemy* CurrentEnemy = Enemy.Get())
 	{
-		CurrentEnemy->GetAttributes().OnDeath().RemoveAll(this);
+		UCombatAttributesComponent& Attributes = CurrentEnemy->GetAttributes();
+		Attributes.OnDeath().RemoveAll(this);
+		Attributes.OnHealthChanged().RemoveAll(this);
 	}
 
 	Hero.Reset();
 	Enemy.Reset();
+	ParticipantHealthChanged.Broadcast();
+	ParticipantHealthChanged.Clear();
 	EncounterID.Invalidate();
 	EnemyDefinitionID = FPrimaryAssetId();
 	bCurrentEnemyIsBoss = false;

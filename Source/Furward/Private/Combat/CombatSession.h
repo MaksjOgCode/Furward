@@ -32,6 +32,16 @@ struct FCombatBaseAttributes;
 struct FDataTableRowHandle;
 struct FCombatStageRow;
 
+/** @brief Копия здоровья одного участника для отображения. Нулевой максимум означает, что данные ещё не готовы. */
+struct FCombatParticipantHealth
+{
+	float Current = 0.0f;
+	float Maximum = 0.0f;
+};
+
+/** @brief Сообщает интерфейсу об изменении здоровья или смене доступных участников. */
+DECLARE_MULTICAST_DELEGATE(FCombatParticipantHealthChanged);
+
 /** @brief Результат проверки луча от курсора, который контроллер вычисляет перед отправкой команды. */
 enum class ECombatClickResult : uint8
 {
@@ -133,6 +143,15 @@ public:
 	 * @return Текущий живой противник или nullptr при смене цели, завершении этапа, поражении, её отсутствии или смерти.
 	 */
 	const ACombatEnemy* GetActiveEnemy() const;
+
+	/** @brief Возвращает здоровье героя для HUD, включая ноль после поражения. */
+	FCombatParticipantHealth GetHeroHealthForDisplay() const;
+
+	/** @brief Возвращает здоровье текущего врага для HUD, включая ноль после победы. */
+	FCombatParticipantHealth GetEnemyHealthForDisplay() const;
+
+	/** @brief Даёт интерфейсу подписаться на обновления здоровья обоих участников. */
+	FCombatParticipantHealthChanged& OnParticipantHealthChanged() { return ParticipantHealthChanged; }
 
 	/**
 	 * @brief Инициализирует обоих участников готовыми данными и открывает приём команд.
@@ -507,6 +526,12 @@ private:
 
 	/** @brief Результат после смерти противника. Сохраняется до регистрации следующего или завершения сессии. */
 	TOptional<FCombatEncounterResult> EncounterResult;
+
+	/** @brief Уведомляет интерфейс после того, как компонент участника записал новое HP. */
+	void HandleParticipantHealthChanged(float Previous, float Current);
+
+	/** @brief Подписчики HUD на время жизни сессии. */
+	FCombatParticipantHealthChanged ParticipantHealthChanged;
 
 	/** @brief Снимок противника при поражении. Shutdown() очищает его вместе с результатом боя. */
 	TOptional<FCombatDefeatSnapshot> DefeatSnapshot;
