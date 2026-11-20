@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает подготовку боя, фиксацию исхода и смену противника в L_Combat.
+ * @brief Описывает подготовку и активацию столкновений, приём атак и фиксацию исхода в L_Combat.
  */
 
 #pragma once
@@ -23,6 +23,7 @@ class ACombatHero;
 class ACombatEnemy;
 class UCombatAttributesComponent;
 class UCombatEnemyDefinition;
+class UCombatRulesDefinition;
 struct FCombatBaseAttributes;
 struct FDataTableRowHandle;
 
@@ -129,6 +130,15 @@ public:
 	bool PrepareNextEnemy(const UCombatEnemyDefinition& Definition, const FCombatBaseAttributes& EnemyBase);
 
 	/**
+	 * @brief Открывает ввод для подготовленного столкновения согласно правилу старта.
+	 * @param[in] ExpectedEncounterID Идентификатор, полученный после подготовки следующего противника.
+	 * @param[in] Rules Настройки старта из описания боевых правил.
+	 * @return true, если готовое столкновение переведено из ChangingEnemy в Ready или Fighting.
+	 * @note Пауза, устаревший запрос и незаданное правило оставляют фазу прежней.
+	 */
+	bool ActivatePreparedEncounter(const FGuid& ExpectedEncounterID, const UCombatRulesDefinition& Rules);
+
+	/**
 	 * @brief Проверяет запрос атаки, который контроллер передаёт после трассировки клика.
 	 * @param[in] Result Результат трассировки. Запрос может содержать Hit или Miss.
 	 * @param[in] Target Тот же экземпляр противника, по которому выполнена трассировка.
@@ -171,7 +181,8 @@ private:
 	 * @brief Фаза сессии, от которой зависит допуск команды кликовой атаки.
 	 *
 	 * Начинается с Preparing, становится Ready после инициализации характеристик,
-	 * Fighting после первого урона, ChangingEnemy после смерти противника и Leaving при Shutdown().
+	 * Fighting после первого положительного урона или автоматического старта, ChangingEnemy после смерти
+	 * противника и Leaving при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
 
@@ -179,6 +190,19 @@ private:
 	/** @brief Разрешение на пробный бой, которое GameMode передаёт при входе в мир PIE. */
 	bool bPIECombatPreview = false;
 #endif
+
+	/**
+	 * @brief Переводит подготовленное столкновение в активную фазу через общую точку старта.
+	 * @pre Сессия в Ready и применила положительный урон либо приняла автоматический старт в ChangingEnemy.
+	 */
+	void EnterFighting();
+
+	/**
+	 * @brief Проверяет видимость арены, готовность участников, принадлежность цели и состояние паузы.
+	 * @param[in] Target Противник, которого вызывающий код собирается активировать или атаковать.
+	 * @return true, если сцена и оба участника готовы выполнять боевые действия.
+	 */
+	bool CanUseCurrentEnemy(const ACombatEnemy* Target) const;
 
 	/**
 	 * @brief Повторно проверяет фазу, цель, участников и паузу перед боевой операцией.

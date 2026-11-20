@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет в L_Combat допуск атак, однократную фиксацию исхода и смену противника.
+ * @brief Проверяет в L_Combat атаки, фиксацию исхода, смену противника и варианты старта.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -12,6 +12,7 @@
 #include "Combat/CombatEnemyDefinition.h"
 #include "Combat/CombatGameMode.h"
 #include "Combat/CombatHero.h"
+#include "Combat/CombatRulesDefinition.h"
 #include "Combat/CombatSession.h"
 #include "Components/BoxComponent.h"
 #include "Engine/World.h"
@@ -19,7 +20,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
-/** @brief Проверяет допуск кликов, завершение боя и подготовку следующей цели. */
+/** @brief Проверяет допуск кликов, завершение боя и активацию следующего столкновения. */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCombatClickCommandTest, "Furward.Combat.ClickCommandValidation",
 	EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
 
@@ -228,6 +229,50 @@ bool FVerifyCombatClickCommands::Update()
 		Session->ApplyResolvedDamageToEnemy(NextEnemy, 10.0f), 0.0f);
 	Test->TestFalse(TEXT("Repeated preparation cannot replace a living enemy"),
 		Session->PrepareNextEnemy(*NextDefinition, EnemyBase));
+
+	// Создаём два явно настроенных варианта для проверки переходов в одной сессии.
+	UCombatRulesDefinition* Rules = NewObject<UCombatRulesDefinition>();
+	Test->TestFalse(TEXT("An unspecified rule keeps the replacement waiting"),
+		Session->ActivatePreparedEncounter(NextEncounterID, *Rules));
+	Test->TestTrue(TEXT("The phase stays ChangingEnemy while no rule was selected"),
+		Session->GetPhase() == ECombatPhase::ChangingEnemy);
+
+	Rules->NextEncounterStart = ECombatNextEncounterStartRule::OnFirstDamage;
+	Test->TestFalse(TEXT("The defeated encounter cannot activate its replacement"),
+		Session->ActivatePreparedEncounter(FirstEncounterID, *Rules));
+	if (!Test->TestTrue(TEXT("A configured first-damage rule activates the replacement"),
+		Session->ActivatePreparedEncounter(NextEncounterID, *Rules)))
+	{
+		return true;
+	}
+
+	Test->TestTrue(TEXT("The first-damage rule opens attacks in Ready"),
+		Session->GetPhase() == ECombatPhase::Ready && Session->GetActiveEnemy() == NextEnemy);
+	Test->TestTrue(TEXT("The replacement accepts a miss in Ready"),
+		Session->TrySubmitClickAttack(ECombatClickResult::Miss, NextEnemy));
+	Test->TestTrue(TEXT("A miss keeps the replacement in Ready"), Session->GetPhase() == ECombatPhase::Ready);
+	Test->TestEqual(TEXT("The next positive hit applies damage"),
+		Session->ApplyResolvedDamageToEnemy(NextEnemy, 10.0f), 10.0f);
+	Test->TestTrue(TEXT("First damage starts the new fight"), Session->GetPhase() == ECombatPhase::Fighting);
+
+	Session->ApplyResolvedDamageToEnemy(NextEnemy, EnemyBase.MaxHealth);
+	Rules->NextEncounterStart = ECombatNextEncounterStartRule::Automatic;
+	Test->TestFalse(TEXT("Automatic start needs a prepared replacement"),
+		Session->ActivatePreparedEncounter(NextEncounterID, *Rules));
+	if (!Test->TestTrue(TEXT("A third enemy can be prepared for automatic start"),
+		Session->PrepareNextEnemy(*NextDefinition, EnemyBase)))
+	{
+		return true;
+	}
+	const FGuid AutomaticEncounterID = Session->GetEncounterID();
+	Test->TestTrue(TEXT("An explicit automatic rule starts the prepared fight"),
+		Session->ActivatePreparedEncounter(AutomaticEncounterID, *Rules));
+	const ACombatEnemy* AutomaticEnemy = Session->GetActiveEnemy();
+	Test->TestTrue(TEXT("Automatic start enters Fighting before any damage"),
+		Session->GetPhase() == ECombatPhase::Fighting && AutomaticEnemy &&
+		AutomaticEnemy->GetAttributes().GetCurrentHealth() == EnemyBase.MaxHealth);
+	Test->TestFalse(TEXT("The same encounter cannot be activated twice"),
+		Session->ActivatePreparedEncounter(AutomaticEncounterID, *Rules));
 
 	return true;
 }

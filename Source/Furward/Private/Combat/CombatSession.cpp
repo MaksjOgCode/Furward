@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подготавливает бой, принимает атаки, фиксирует исход и заменяет противника в текущей арене.
+ * @brief Подготавливает и активирует столкновения, принимает атаки и фиксирует исход в текущей арене.
  */
 
 #include "Combat/CombatSession.h"
@@ -13,6 +13,7 @@
 #include "Combat/CombatEnvironmentDefinition.h"
 #include "Combat/CombatHero.h"
 #include "Combat/CombatPlayerController.h"
+#include "Combat/CombatRulesDefinition.h"
 #include "Combat/CombatStageRow.h"
 #include "Engine/Level.h"
 #include "Engine/LevelStreamingDynamic.h"
@@ -336,6 +337,29 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 	return true;
 }
 
+bool UCombatSession::ActivatePreparedEncounter(const FGuid& ExpectedEncounterID, const UCombatRulesDefinition& Rules)
+{
+	// Отложенный запрос действует только для той замены, для которой был получен EncounterID.
+	if (Phase != ECombatPhase::ChangingEnemy || !ExpectedEncounterID.IsValid() ||
+		ExpectedEncounterID != EncounterID || EncounterResult.IsSet() || !CanUseCurrentEnemy(Enemy.Get()))
+	{
+		return false;
+	}
+
+	switch (Rules.NextEncounterStart)
+	{
+	case ECombatNextEncounterStartRule::OnFirstDamage:
+		Phase = ECombatPhase::Ready;
+		UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Ready; Next encounter awaits damage."));
+		return true;
+	case ECombatNextEncounterStartRule::Automatic:
+		EnterFighting();
+		return true;
+	default:
+		return false;
+	}
+}
+
 bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const ACombatEnemy* Target)
 {
 	// Допускаем только результаты, которые образуют команду. Ignore отбрасывается и при прямом вызове метода.
@@ -383,14 +407,19 @@ float UCombatSession::ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, flo
 	// Для первого эффективного удара фиксируем Fighting до уведомлений, включая уведомление о смерти.
 	if (Phase == ECombatPhase::Ready)
 	{
-		Phase = ECombatPhase::Fighting;
-		UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Fighting"));
+		EnterFighting();
 	}
 
 	UE_LOG(LogCombatSession, Display, TEXT("Damage applied: %.2f; Target: %s; HP: %.2f/%.2f"),
 		AppliedDamage, *Target->GetName(), Attributes.GetCurrentHealth(), Attributes.GetMaxHealth());
 	Attributes.PublishDamage(PreviousHealth);
 	return AppliedDamage;
+}
+
+void UCombatSession::EnterFighting()
+{
+	Phase = ECombatPhase::Fighting;
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Fighting"));
 }
 
 void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
@@ -416,9 +445,18 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 
 bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
 {
-	// Перепроверяем сцену в момент запроса. Она должна оставаться доступной во время Ready и Fighting.
-	const bool bCanFight = Phase == ECombatPhase::Ready || Phase == ECombatPhase::Fighting;
-	if (!bCanFight || !Hero.IsValid() || !ActiveArena.IsValid() ||
+	if (Phase != ECombatPhase::Ready && Phase != ECombatPhase::Fighting)
+	{
+		UE_LOG(LogCombatSession, Verbose, TEXT("Combat attack rejected: combat phase does not allow attacks."));
+		return false;
+	}
+
+	return CanUseCurrentEnemy(Target);
+}
+
+bool UCombatSession::CanUseCurrentEnemy(const ACombatEnemy* Target) const
+{
+	if (!Hero.IsValid() || !ActiveArena.IsValid() ||
 		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
 	{
 		UE_LOG(LogCombatSession, Verbose, TEXT("Combat attack rejected: combat scene is not ready."));
@@ -432,8 +470,11 @@ bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
 		return false;
 	}
 
-	// Запрос относится только к живым участникам, даже если актор после смерти ещё находится на карте.
-	if (Hero->GetAttributes().IsDead() || Target->GetAttributes().IsDead())
+	// Спауна недостаточно: оба компонента должны получить характеристики и иметь положительное здоровье.
+	const UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
+	const UCombatAttributesComponent& EnemyAttributes = Target->GetAttributes();
+	if (!HeroAttributes.IsHealthInitialized() || !EnemyAttributes.IsHealthInitialized() ||
+		HeroAttributes.IsDead() || EnemyAttributes.IsDead())
 	{
 		return false;
 	}
