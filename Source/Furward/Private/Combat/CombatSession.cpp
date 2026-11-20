@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подготавливает и активирует столкновения, принимает атаки и фиксирует исход в текущей арене.
+ * @brief Готовит столкновения, обрабатывает атаки героя и противника и фиксирует исход в текущей арене.
  */
 
 #include "Combat/CombatSession.h"
@@ -19,6 +19,7 @@
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 
 
 
@@ -60,6 +61,64 @@ void UCombatSession::TryContinuePIECombatPreview()
 	{
 		UE_LOG(LogCombatSession, Warning, TEXT("PIE combat preview could not activate the next encounter."));
 	}
+}
+
+void UCombatSession::StartPIEEnemyAttacks()
+{
+	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
+	const ACombatEnemy* CurrentEnemy = Enemy.Get();
+	if (!bPIECombatPreview || !IsValid(Rules) || !CanUseCurrentEnemy(CurrentEnemy))
+	{
+		return;
+	}
+
+	const float FirstDelay = Rules->FirstEnemyAttackDelaySeconds;
+	const float Interval = Rules->EnemyAttackIntervalSeconds;
+	if (!FMath::IsFinite(FirstDelay) || FirstDelay < 0.0f ||
+		!FMath::IsFinite(Interval) || Interval <= 0.0f)
+	{
+		return;
+	}
+
+	// Идентификатор связывает callback с тем столкновением, для которого создан таймер.
+	CurrentEnemy->GetWorld()->GetTimerManager().SetTimer(PIEEnemyAttackTimer,
+		FTimerDelegate::CreateUObject(this, &UCombatSession::HandlePIEEnemyAttack, EncounterID),
+		Interval, true, FirstDelay);
+	UE_LOG(LogCombatSession, Display, TEXT("Enemy attacks scheduled: first %.2fs; interval %.2fs"), FirstDelay, Interval);
+}
+
+void UCombatSession::StopPIEEnemyAttacks()
+{
+	// Outer сессии — GameMode. Он даёт доступ к миру даже при потере ссылки на противника.
+	if (UWorld* World = GetOuter()->GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PIEEnemyAttackTimer);
+	}
+	PIEEnemyAttackTimer.Invalidate();
+}
+
+void UCombatSession::HandlePIEEnemyAttack(FGuid AttackingEncounterID)
+{
+	const ACombatEnemy* CurrentEnemy = Enemy.Get();
+	if (Phase != ECombatPhase::Fighting || AttackingEncounterID != EncounterID ||
+		!CanUseCurrentEnemy(CurrentEnemy))
+	{
+		return;
+	}
+
+	UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
+	const float DamagePerHit = CurrentEnemy->GetAttributes().GetBaseAttributes().DamagePerHit;
+	const float Armor = HeroAttributes.GetBaseAttributes().Armor;
+	const float PreviousHealth = HeroAttributes.GetCurrentHealth();
+	const float AppliedDamage = HeroAttributes.ReduceHealth(FMath::Max(0.0f, DamagePerHit - Armor));
+	if (AppliedDamage <= 0.0f)
+	{
+		return;
+	}
+
+	UE_LOG(LogCombatSession, Display, TEXT("Enemy attack applied: %.2f; Hero HP: %.2f/%.2f"),
+		AppliedDamage, HeroAttributes.GetCurrentHealth(), HeroAttributes.GetMaxHealth());
+	HeroAttributes.PublishDamage(PreviousHealth);
 }
 #endif
 
@@ -220,6 +279,7 @@ void UCombatSession::SpawnHero(UWorld& World, const ACombatArena& Arena)
 
 	// Храним слабую ссылку. В логе указываем экземпляр и пакет уровня для проверки размещения.
 	Hero = SpawnedHero;
+	SpawnedHero->GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleHeroDeath);
 
 	UE_LOG(LogCombatSession, Display, TEXT("Hero spawned: %s in %s"),
 		*SpawnedHero->GetName(), *SpawnedHero->GetLevel()->GetOutermost()->GetName());
@@ -281,7 +341,7 @@ void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
 
 const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 {
-	if (Phase == ECombatPhase::ChangingEnemy)
+	if (Phase == ECombatPhase::ChangingEnemy || Phase == ECombatPhase::Defeated)
 	{
 		return nullptr;
 	}
@@ -453,6 +513,9 @@ void UCombatSession::EnterFighting()
 {
 	Phase = ECombatPhase::Fighting;
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Fighting"));
+#if WITH_EDITOR
+	StartPIEEnemyAttacks();
+#endif
 }
 
 void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
@@ -466,6 +529,9 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 
 	// Сначала закрываем приём атак, пока актор и его модель остаются в постоянном уровне.
 	Phase = ECombatPhase::ChangingEnemy;
+#if WITH_EDITOR
+	StopPIEEnemyAttacks();
+#endif
 	CurrentEnemy->DisableClickAreas();
 
 	// Фиксируем исход по идентификатору столкновения и типу контента. Актор может быть удалён при замене.
@@ -474,6 +540,28 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: ChangingEnemy"));
 	UE_LOG(LogCombatSession, Display, TEXT("Combat encounter result recorded: %s; Enemy definition: %s"),
 		*EncounterID.ToString(EGuidFormats::DigitsWithHyphens), *EnemyDefinitionID.ToString());
+}
+
+void UCombatSession::HandleHeroDeath(const UCombatAttributesComponent& Source)
+{
+	const ACombatHero* CurrentHero = Hero.Get();
+	ACombatEnemy* CurrentEnemy = Enemy.Get();
+	if (Phase != ECombatPhase::Fighting || !CurrentHero || !CurrentEnemy ||
+		&CurrentHero->GetAttributes() != &Source || !Source.IsDead())
+	{
+		return;
+	}
+
+	Phase = ECombatPhase::Defeated;
+#if WITH_EDITOR
+	StopPIEEnemyAttacks();
+#endif
+	CurrentEnemy->DisableClickAreas();
+
+	const UCombatAttributesComponent& EnemyAttributes = CurrentEnemy->GetAttributes();
+	DefeatSnapshot = FCombatDefeatSnapshot{EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth()};
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Defeated; Enemy HP: %.2f/%.2f"),
+		EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth());
 }
 
 bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
@@ -526,6 +614,13 @@ bool UCombatSession::CanUseCurrentEnemy(const ACombatEnemy* Target) const
 void UCombatSession::Shutdown() {
 	// Сначала блокируем новые команды. Постоянный уровень продолжает владеть участниками до завершения мира.
 	Phase = ECombatPhase::Leaving;
+#if WITH_EDITOR
+	StopPIEEnemyAttacks();
+#endif
+	if (ACombatHero* CurrentHero = Hero.Get())
+	{
+		CurrentHero->GetAttributes().OnDeath().RemoveAll(this);
+	}
 	if (ACombatEnemy* CurrentEnemy = Enemy.Get())
 	{
 		CurrentEnemy->GetAttributes().OnDeath().RemoveAll(this);
@@ -536,6 +631,7 @@ void UCombatSession::Shutdown() {
 	EncounterID.Invalidate();
 	EnemyDefinitionID = FPrimaryAssetId();
 	EncounterResult.Reset();
+	DefeatSnapshot.Reset();
 	InitialEnemy = nullptr;
 	ActiveArena.Reset();
 

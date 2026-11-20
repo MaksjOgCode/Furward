@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет в L_Combat атаки, фиксацию исхода, смену противника и варианты старта.
+ * @brief Проверяет в L_Combat атаки, смену противника, варианты старта и исход поражения.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -273,6 +273,21 @@ bool FVerifyCombatClickCommands::Update()
 		AutomaticEnemy->GetAttributes().GetCurrentHealth() == EnemyBase.MaxHealth);
 	Test->TestFalse(TEXT("The same encounter cannot be activated twice"),
 		Session->ActivatePreparedEncounter(AutomaticEncounterID, *Rules));
+
+	// Отдельно доводим HP героя до нуля. Снимок должен зафиксировать именно остаток HP противника.
+	Test->TestFalse(TEXT("A living hero has no defeat snapshot"), Session->GetDefeatSnapshot().IsSet());
+	Test->TestEqual(TEXT("Damage before defeat reduces the enemy's current health"),
+		Session->ApplyResolvedDamageToEnemy(AutomaticEnemy, 10.0f), 10.0f);
+	Test->TestEqual(TEXT("Lethal damage to the hero consumes the remaining health"),
+		HeroAttributes.ApplyDamage(100.0f), 70.0f);
+	Test->TestTrue(TEXT("Hero death stops the fight in Defeated"),
+		Session->GetPhase() == ECombatPhase::Defeated);
+	const TOptional<FCombatDefeatSnapshot> Defeat = Session->GetDefeatSnapshot();
+	Test->TestTrue(TEXT("Defeat preserves the current and maximum enemy HP"),
+		Defeat.IsSet() && Defeat.GetValue().EnemyCurrentHealth == 75.0f && Defeat.GetValue().EnemyMaxHealth == 85.0f);
+	Test->TestTrue(TEXT("Defeat hides the enemy from click targeting"), Session->GetActiveEnemy() == nullptr);
+	Test->TestFalse(TEXT("No attack is accepted after defeat"),
+		Session->TrySubmitClickAttack(ECombatClickResult::Hit, AutomaticEnemy));
 
 	return true;
 }

@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает настраиваемый переход к бою после подготовки следующего противника.
+ * @brief Описывает старт следующего столкновения и интервалы ответных атак противника.
  */
 
 #pragma once
@@ -26,8 +26,7 @@ enum class ECombatNextEncounterStartRule : uint8
 /**
  * @brief Хранит настройки боевых правил для DA_Combat_Rules.
  *
- * Автор контента выбирает правило старта в Data Asset. Сессия читает его при активации
- * подготовленной замены. Экземпляр ассета не хранит состояние боя.
+ * Автор контента задаёт правила в Data Asset. Сессия читает их при активации нового боя и настройке таймера.
  */
 UCLASS()
 class UCombatRulesDefinition : public UDataAsset
@@ -38,4 +37,12 @@ public:
 	/** @brief Правило выхода из ChangingEnemy, которое задают после согласования GDD. */
 	UPROPERTY(EditAnywhere, Category = "Combat|Encounter")
 	ECombatNextEncounterStartRule NextEncounterStart = ECombatNextEncounterStartRule::Unspecified;
+
+	/** @brief Задержка первого ответного удара в секундах игрового времени после входа в Fighting. */
+	UPROPERTY(EditAnywhere, Category = "Combat|Enemy Attacks", meta = (ClampMin = "0.0"))
+	float FirstEnemyAttackDelaySeconds = 0.0f;
+
+	/** @brief Интервал ответных ударов в секундах. Ноль оставляет таймер выключенным. */
+	UPROPERTY(EditAnywhere, Category = "Combat|Enemy Attacks", meta = (ClampMin = "0.0"))
+	float EnemyAttackIntervalSeconds = 0.0f;
 };

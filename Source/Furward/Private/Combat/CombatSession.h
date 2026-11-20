@@ -9,6 +9,7 @@
 
 #include "CoreMinimal.h"
 #include "Combat/CombatEncounterResult.h"
+#include "Engine/TimerHandle.h"
 #include "Misc/Optional.h"
 #include "Templates/SubclassOf.h"
 #include "UObject/Object.h"
@@ -49,6 +50,8 @@ enum class ECombatPhase : uint8
 	Fighting,
 	/** @brief Сессия обрабатывает исход и готовит замену. Атаки закрыты до перехода в Ready или Fighting. */
 	ChangingEnemy,
+	/** @brief Герой погиб, боевые атаки остановлены и снимок противника сохранён. */
+	Defeated,
 	/** @brief Сессия блокирует команды и освобождает ссылки при завершении. */
 	Leaving
 };
@@ -59,7 +62,7 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия принимает смерть от компонента характеристик противника и формирует результат по идентификатору столкновения.
+ * Сессия принимает сигналы смерти от компонентов участников, фиксирует исход и управляет таймером ответных атак.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -76,7 +79,7 @@ public:
 
 #if WITH_EDITOR
 	/**
-	 * @brief Включает пробные характеристики, формулу урона и смену противника по настроенным правилам.
+	 * @brief Включает пробные характеристики, формулу урона и цикл ответных атак и замены по настроенным правилам.
 	 * @param[in] InRules Загруженный GameMode ассет. При пустой ссылке пробный бой заканчивается в ChangingEnemy.
 	 * @pre GameMode проверил тип мира и явное включение проверки до запроса этапа.
 	 */
@@ -94,17 +97,17 @@ public:
 	void RequestInitialStage(UObject* WorldContextObject, const FDataTableRowHandle& StageHandle);
 
 	/**
-	 * @brief Блокирует команды, снимает подписку на смерть противника и запрашивает выгрузку окружения.
+	 * @brief Блокирует команды, очищает таймер и подписки участников и запрашивает выгрузку окружения.
 	 *
 	 * GameMode вызывает метод в EndPlay() перед освобождением сессии.
-	 * @post Ссылки на сцену, идентификатор и результат текущего столкновения очищены.
+	 * @post Ссылки на сцену, идентификатор и данные исхода текущего столкновения очищены.
 	 * @note Unreal может завершить выгрузку позже.
 	 */
 	void Shutdown();
 
 	/**
 	 * @brief Даёт контроллеру текущую цель перед трассировкой клика.
-	 * @return Текущий живой противник или nullptr при смене цели, её отсутствии или смерти.
+	 * @return Текущий живой противник или nullptr при смене цели, поражении, её отсутствии или смерти.
 	 */
 	const ACombatEnemy* GetActiveEnemy() const;
 
@@ -177,13 +180,19 @@ public:
 	 */
 	TOptional<FCombatEncounterResult> GetEncounterResult() const { return EncounterResult; }
 
+	/**
+	 * @brief Возвращает копию данных о противнике для итогов после гибели героя.
+	 * @return Снимок поражения или пустое значение, пока герой не погиб.
+	 */
+	TOptional<FCombatDefeatSnapshot> GetDefeatSnapshot() const { return DefeatSnapshot; }
+
 private:
 	/**
 	 * @brief Фаза сессии, от которой зависит допуск команды кликовой атаки.
 	 *
 	 * Начинается с Preparing, становится Ready после инициализации характеристик,
 	 * Fighting после первого положительного урона или автоматического старта, ChangingEnemy после смерти
-	 * противника и Leaving при Shutdown().
+	 * противника, Defeated после смерти героя и Leaving при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
 
@@ -197,6 +206,25 @@ private:
 	 * @post После смерти и при заданном правиле сессия создаёт и активирует следующий экземпляр.
 	 */
 	void TryContinuePIECombatPreview();
+
+	/**
+	 * @brief Запускает повторяемые удары текущего противника, если пробный бой и интервалы настроены.
+	 * @pre Сессия вошла в Fighting и проверяет обоих участников перед запуском.
+	 */
+	void StartPIEEnemyAttacks();
+
+	/** @brief Отменяет таймер текущего столкновения и освобождает его дескриптор. */
+	void StopPIEEnemyAttacks();
+
+	/**
+	 * @brief Применяет один ответный удар живого противника по герою.
+	 * @param[in] AttackingEncounterID Идентификатор, переданный таймеру при старте.
+	 * @note Фаза, актуальность столкновения и готовность участников проверяются при каждом ударе.
+	 */
+	void HandlePIEEnemyAttack(FGuid AttackingEncounterID);
+
+	/** @brief Дескриптор одного таймера ответных ударов для текущего столкновения PIE. */
+	FTimerHandle PIEEnemyAttackTimer;
 #endif
 
 #if WITH_EDITORONLY_DATA
@@ -285,6 +313,13 @@ private:
 	void HandleEnemyDeath(const UCombatAttributesComponent& Source);
 
 	/**
+	 * @brief Останавливает бой после гибели героя и сохраняет здоровье противника для итогов.
+	 * @param[in] Source Компонент характеристик героя, опубликовавший OnDeath.
+	 * @post Сессия в Fighting переходит в Defeated при смерти текущего героя. Атаки прекращаются.
+	 */
+	void HandleHeroDeath(const UCombatAttributesComponent& Source);
+
+	/**
 	 * @brief Класс героя, полученный от GameMode в Initialize().
 	 *
 	 * Хранится до уничтожения сессии. Пустое значение останавливает спаун героя.
@@ -325,4 +360,7 @@ private:
 
 	/** @brief Результат после смерти противника. Сохраняется до регистрации следующего или завершения сессии. */
 	TOptional<FCombatEncounterResult> EncounterResult;
+
+	/** @brief Снимок противника при поражении. Shutdown() очищает его вместе с результатом боя. */
+	TOptional<FCombatDefeatSnapshot> DefeatSnapshot;
 };
