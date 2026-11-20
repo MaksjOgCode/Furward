@@ -1,13 +1,8 @@
 // Copyright © 2026 Maksj.OG
 
 /**
- * @file     CombatGameMode.h
- * 
- * @brief    Владелец сессии (Игровой режим постоянной карты L_Combat)
- * 
- * @details  Создаёт UCombatSession в InitGame(), удерживает боевую сессию через UPROPERTY
- *           и вызывает Shutdown() перед освобождением ссылки в EndPlay().
- *           Описание стартового окружения выбирается в BP_Combat_GameMode.
+ * @file
+ * @brief Описывает, как игровой режим L_Combat создаёт и завершает боевую сессию.
  */
 
 #pragma once
@@ -28,9 +23,10 @@ class UCombatEnemyDefinition;
 
 
 /**
- * @class	ACombatGameMode
+ * @brief Владеет одной UCombatSession на время посещения карты L_Combat.
  *
- * @brief   Создаёт, инициализирует и завершает UCombatSession. Предоставляет конфигурацию боевой системы и координирует завершение работы карты
+ * Unreal создаёт экземпляр BP_Combat_GameMode для игрового мира.
+ * В Class Defaults задают окружение, героя и описание первого противника.
  */
 UCLASS()
 class ACombatGameMode : public AGameModeBase
@@ -38,35 +34,72 @@ class ACombatGameMode : public AGameModeBase
 	GENERATED_BODY()
 public:
 	/**
-	 * Создаёт боевую сессию и передаёт ей класс героя и описание первого противника до BeginPlay().
+	 * @brief Создаёт сессию и передаёт ей настройки участников до начала игры.
 	 *
-	 * @param      MapName      Имя запускаемой карты
-	 * @param      Options      Параметры запуска карты из URL
-	 * @param[out] ErrorMessage Сообщение, которое движок получит при ошибке инициализации
+	 * Unreal вызывает метод при инициализации карты. Сессия пишет Initialize в лог.
+	 * @param[in] MapName Имя текущей карты.
+	 * @param[in] Options Параметры запуска карты из URL.
+	 * @param[out] ErrorMessage Сообщение об ошибке инициализации от базового GameMode.
+	 * @post GameMode удерживает созданную сессию.
 	 */
 	virtual void InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage) override;
 
+	/**
+	 * @brief Даёт контроллеру доступ к сессии при обработке клика.
+	 * @return Сессия текущего посещения L_Combat или nullptr до InitGame() и после EndPlay().
+	 */
+	UCombatSession* GetCombatSession();
+
 protected:
-	/** Передаёт сессии стартовое окружение после вызова базового BeginPlay() */
+	/**
+	 * @brief Запрашивает подгрузку стартового окружения, когда Unreal запускает карту.
+	 *
+	 * Если описание или карта не назначены, пишет предупреждение. При принятии запроса сессия пишет Environment requested.
+	 * @pre InitGame() создал CombatSession.
+	 * @see UCombatSession::RequestInitialEnvironment
+	 */
 	virtual void BeginPlay() override;
 
-	/** Вызывает Shutdown() у действующей сессии и освобождает ссылку до базового EndPlay() */
+	/**
+	 * @brief Завершает сессию, когда Unreal заканчивает игру на карте.
+	 * @param[in] EndPlayReason Причина завершения, которую получает базовый GameMode.
+	 * @post Ссылка на CombatSession очищена.
+	 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** Описание стартового окружения, выбранное в настройках BP_Combat_GameMode */
+	/**
+	 * @brief Описание стартового окружения из Class Defaults BP_Combat_GameMode.
+	 *
+	 * GameMode удерживает его как настройку на время жизни экземпляра.
+	 * Пустое поле оставляет сцену без запроса загрузки и даёт предупреждение в BeginPlay().
+	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Environment")
 	TObjectPtr <UCombatEnvironmentDefinition> InitialEnvironment = nullptr;
 
-	/** Удерживает сессию с момента создания в InitGame() до освобождения ссылки в EndPlay() */
+	/**
+	 * @brief Удерживающая ссылка на сессию от InitGame() до EndPlay().
+	 *
+	 * Outer связывает сессию с GameMode, а UPROPERTY удерживает её для сборщика мусора.
+	 * Transient исключает временную ссылку из обычного сохранения. Пустое поле означает отсутствие сессии.
+	 */
 	UPROPERTY(Transient)
 	TObjectPtr <UCombatSession> CombatSession = nullptr;
 
-	/** Класс героя, выбранный в настройках BP_Combat_GameMode */
+	/**
+	 * @brief Класс героя, назначенный в Class Defaults и передаваемый сессии в InitGame().
+	 *
+	 * Пустой класс приводит к ошибке спауна героя после появления окружения.
+	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Participants")
 	TSubclassOf <ACombatHero> HeroClass;
 
-	/** Описание первого противника, выбранное в настройках BP_Combat_GameMode. */
+	/**
+	 * @brief Стартовое описание вида, назначенное в Class Defaults.
+	 *
+	 * GameMode удерживает ассет и передаёт его сессии в InitGame().
+	 * Если поле пусто, сессия пишет ошибку и пропускает спаун противника.
+	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Participants")
 	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
 };

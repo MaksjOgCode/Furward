@@ -1,8 +1,8 @@
 // Copyright © 2026 Maksj.OG
 
 /**
- * @file CombatHero.cpp
- * @brief Создаёт корень, к которому Blueprint крепит модель героя.
+ * @file
+ * @brief Создаёт SceneRoot для модели героя, которую настраивают в BP_Combat_Hero.
  */
 
 #include "Combat/CombatHero.h"
@@ -12,5 +12,6 @@
 
 ACombatHero::ACombatHero()
 {
+	// Корень получает трансформ из точки арены. Модель в Blueprint сохраняет своё смещение относительно него.
 	SetRootComponent( CreateDefaultSubobject <USceneComponent> (TEXT("SceneRoot")) );
 }

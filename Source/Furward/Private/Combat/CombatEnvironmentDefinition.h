@@ -1,13 +1,9 @@
 // Copyright © 2026 Maksj.OG
 
- /**
-  * @file     CombatEnvironmentDefinition.h
-  *
-  * @brief    Назначение данных (Тип для ассетов DA_Combat_Environment, описывающих боевые локации)
-  *
-  * @details  Хранит мягкую ссылку на карту окружения для отдельного запроса подгрузки.
-  *           Во время боя описание используется только для чтения.
-  */
+/**
+ * @file
+ * @brief Описывает Data Asset, по которому GameMode узнаёт, какую карту окружения подгрузить в L_Combat.
+ */
 
 #pragma once
 
@@ -22,20 +18,29 @@ class UWorld;
 
 
 /**
- * @class	UCombatEnvironmentDefinition
+ * @brief Хранит ссылку на карту одного боевого окружения.
  *
- * @brief   Описывает окружение, предназначенное для подгрузки в L_Combat
+ * Автор локации создаёт экземпляр ассета в редакторе и выбирает его в BP_Combat_GameMode.
+ * GameMode удерживает выбранное описание и читает его при запуске карты.
  */
 UCLASS()
 class UCombatEnvironmentDefinition : public UPrimaryDataAsset
 {
 	GENERATED_BODY()
 public:
-	/** Возвращает мягкую ссылку на карту для запроса подгрузки */
+	/**
+	 * @brief Даёт GameMode ссылку для запроса подгрузки окружения.
+	 * @return Ссылка на выбранную карту. Пустая ссылка означает, что карту в ассете не назначили.
+	 */
 	const TSoftObjectPtr <UWorld>& GetEnvironmentMap() const { return EnvironmentMap; }
 
 private:
-	/** Карта окружения, выбранная в экземпляре Data Asset */
+	/**
+	 * @brief Мягкая ссылка на карту, которую настраивают в экземпляре Data Asset.
+	 *
+	 * Мягкая ссылка хранит путь. Сессия запрашивает загрузку карты отдельно.
+	 * Пустое значение приводит к предупреждению в BeginPlay() у GameMode.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Combat|Environment")
 	TSoftObjectPtr <UWorld> EnvironmentMap;
 };
