@@ -25,6 +25,7 @@ class ACombatEnemy;
 class UCombatAttributesComponent;
 class UCombatEnemyDefinition;
 class UCombatRulesDefinition;
+class UFurwardProfileSubsystem;
 struct FCombatBaseAttributes;
 struct FDataTableRowHandle;
 
@@ -62,7 +63,7 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия принимает сигналы смерти от компонентов участников, фиксирует исход и управляет таймером ответных атак.
+ * Сессия фиксирует исход, управляет таймером атак и передаёт победы пробной экспедиции профилю.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -201,11 +202,17 @@ private:
 	bool bPIECombatPreview = false;
 
 	/**
-	 * @brief После обработки попадания готовит следующего пробного мутанта с полным HP.
+	 * @brief Передаёт победу пробной экспедиции профилю и продолжает зачистку, пока не достигнут порог.
 	 * @pre Пробный бой включён, публикация результата урона завершена.
-	 * @post После смерти и при заданном правиле сессия создаёт и активирует следующий экземпляр.
+	 * @post Победа учитывается по EncounterID. При 10/10 сессия ждёт босса в ChangingEnemy.
 	 */
 	void TryContinuePIECombatPreview();
+
+	/**
+	 * @brief Находит владельца прогресса пробной экспедиции в текущем GameInstance.
+	 * @return Подсистема профиля либо nullptr, пока пробный режим или игровой мир недоступны.
+	 */
+	UFurwardProfileSubsystem* GetPIEProfile() const;
 
 	/**
 	 * @brief Запускает повторяемые удары текущего противника, если пробный бой и интервалы настроены.
@@ -342,6 +349,9 @@ private:
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
+
+	/** @brief Имя строки этапа из DT_Combat_Stages, под которым профиль хранит зачистку. */
+	FName ActiveStageID;
 
 	/**
 	 * @brief Слабая ссылка на экземпляр противника в постоянном уровне.

@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Готовит столкновения, обрабатывает атаки героя и противника и фиксирует исход в текущей арене.
+ * @brief Готовит столкновения, обрабатывает атаки и передаёт зачистку пробного этапа профилю.
  */
 
 #include "Combat/CombatSession.h"
@@ -15,10 +15,12 @@
 #include "Combat/CombatPlayerController.h"
 #include "Combat/CombatRulesDefinition.h"
 #include "Combat/CombatStageRow.h"
+#include "Engine/GameInstance.h"
 #include "Engine/Level.h"
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Profile/FurwardProfileSubsystem.h"
 #include "TimerManager.h"
 
 
@@ -36,9 +38,30 @@ void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
 
 void UCombatSession::TryContinuePIECombatPreview()
 {
+	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet())
+	{
+		return;
+	}
+
+	// Зачитываем победу в профиле до решения о создании следующего противника.
+	UFurwardProfileSubsystem* Profile = GetPIEProfile();
+	if (!Profile || !Profile->TryRecordExpeditionClear(ActiveStageID, EncounterResult.GetValue().EncounterID))
+	{
+		return;
+	}
+
+	const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
+	UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
+		*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
+	if (Profile->IsExpeditionClearComplete(ActiveStageID))
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("PIE expedition boss pending: %s"), *ActiveStageID.ToString());
+		return;
+	}
+
 	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
 	const ACombatEnemy* DefeatedEnemy = Enemy.Get();
-	if (Phase != ECombatPhase::ChangingEnemy || !IsValid(Rules) || !DefeatedEnemy || !IsValid(InitialEnemy.Get()))
+	if (!IsValid(Rules) || !DefeatedEnemy || !IsValid(InitialEnemy.Get()))
 	{
 		return;
 	}
@@ -61,6 +84,14 @@ void UCombatSession::TryContinuePIECombatPreview()
 	{
 		UE_LOG(LogCombatSession, Warning, TEXT("PIE combat preview could not activate the next encounter."));
 	}
+}
+
+UFurwardProfileSubsystem* UCombatSession::GetPIEProfile() const
+{
+	const UWorld* World = GetOuter()->GetWorld();
+	return bPIECombatPreview && World
+		? UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(World->GetGameInstance())
+		: nullptr;
 }
 
 void UCombatSession::StartPIEEnemyAttacks()
@@ -161,6 +192,7 @@ void UCombatSession::RequestInitialStage(UObject* WorldContextObject, const FDat
 	// Запоминаем объект, чтобы принять уведомление о показе и позже запросить выгрузку.
 	EnvironmentStreaming = Streaming;
 	InitialEnemy = Stage->EnemyRoster[0];
+	ActiveStageID = StageHandle.RowName;
 
 	// Unreal вызовет обработчик, когда добавит подуровень в мир и сделает его видимым.
 	Streaming->OnLevelShown.AddDynamic(this, &UCombatSession::HandleEnvironmentShown);
@@ -219,6 +251,18 @@ void UCombatSession::HandleEnvironmentShown()
     // Переключаем камеру и создаём участников по точкам арены на постоянном уровне.
     Controller->UseArenaCamera(FoundArena);
     SpawnHero(*World, *FoundArena);
+
+#if WITH_EDITOR
+    if (const UFurwardProfileSubsystem* Profile = GetPIEProfile();
+        Profile && Profile->IsExpeditionClearComplete(ActiveStageID))
+    {
+        UE_LOG(LogCombatSession, Display, TEXT("PIE expedition resumes at %d/%d; boss pending: %s"),
+            Profile->GetExpeditionClearCount(ActiveStageID), UFurwardProfileSubsystem::RequiredExpeditionClears,
+            *ActiveStageID.ToString());
+        return;
+    }
+#endif
+
     if (IsValid(InitialEnemy.Get()))
     {
         if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *InitialEnemy))
@@ -633,6 +677,7 @@ void UCombatSession::Shutdown() {
 	EncounterResult.Reset();
 	DefeatSnapshot.Reset();
 	InitialEnemy = nullptr;
+	ActiveStageID = NAME_None;
 	ActiveArena.Reset();
 
 #if WITH_EDITORONLY_DATA
