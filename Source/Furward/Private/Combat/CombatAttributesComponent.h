@@ -2,17 +2,19 @@
 
 /**
  * @file
- * @brief Описывает здоровье участника и события изменения здоровья и смерти.
+ * @brief Описывает базовые характеристики, здоровье экземпляра и события его изменения.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/CombatBaseAttributes.h"
 #include "Components/ActorComponent.h"
 #include "Delegates/Delegate.h"
 #include "CombatAttributesComponent.generated.h"
 
 class UCombatAttributesComponent;
+class UCombatSession;
 
 /** @brief Передаёт подписчикам предыдущее и новое здоровье после изменения. */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCombatHealthChanged, float, float);
@@ -21,7 +23,7 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FCombatHealthChanged, float, float);
 DECLARE_MULTICAST_DELEGATE_OneParam(FCombatDeath, const UCombatAttributesComponent&);
 
 /**
- * @brief Хранит текущее и максимальное здоровье одного участника боя.
+ * @brief Хранит базовые параметры и текущее здоровье одного участника боя.
  *
  * Конструктор героя или противника создаёт компонент, который существует вместе с актором.
  * Состояние здоровья появляется после явной инициализации рассчитанными значениями.
@@ -33,13 +35,13 @@ class UCombatAttributesComponent : public UActorComponent
 
 public:
 	/**
-	 * @brief Задаёт здоровье участника один раз перед применением урона.
-	 * @param[in] InMaxHealth Конечное положительное значение максимального здоровья.
+	 * @brief Настраивает базовые характеристики и стартовое здоровье одного участника.
+	 * @param[in] InBaseAttributes Готовые максимум HP, урон за попадание и броня.
 	 * @param[in] InCurrentHealth Конечное положительное начальное здоровье.
-	 * @return true при успешной инициализации. При неверных данных или повторном вызове возвращает false.
-	 * @post При успехе текущее здоровье ограничено максимумом и отправлено событие HealthChanged.
+	 * @return true при успешной настройке. Неверные данные и повторный вызов возвращают false.
+	 * @post При успехе HP ограничено максимумом и отправлено событие HealthChanged.
 	 */
-	bool InitializeHealth(float InMaxHealth, float InCurrentHealth);
+	bool InitializeAttributes(const FCombatBaseAttributes& InBaseAttributes, float InCurrentHealth);
 
 	/**
 	 * @brief Вычитает рассчитанный урон и публикует результат изменения здоровья.
@@ -51,9 +53,9 @@ public:
 
 	/**
 	 * @brief Позволяет боевой логике проверить, можно ли применять операции со здоровьем.
-	 * @return true после успешного InitializeHealth().
+	 * @return true после установки базового набора и стартового здоровья.
 	 */
-	bool IsHealthInitialized() const { return MaxHealth > 0.0f; }
+	bool IsHealthInitialized() const { return BaseAttributes.MaxHealth > 0.0f; }
 
 	/**
 	 * @brief Определяет, исчерпал ли участник своё здоровье.
@@ -71,7 +73,13 @@ public:
 	 * @brief Даёт максимум здоровья для отображения или расчётов.
 	 * @return Максимальное здоровье. Ноль означает ожидание инициализации.
 	 */
-	float GetMaxHealth() const { return MaxHealth; }
+	float GetMaxHealth() const { return BaseAttributes.MaxHealth; }
+
+	/**
+	 * @brief Даёт боевой логике базовые значения участника.
+	 * @return Копия исходных значений, хранящаяся в компоненте. MaxHealth равен нулю до инициализации.
+	 */
+	const FCombatBaseAttributes& GetBaseAttributes() const { return BaseAttributes; }
 
 	/**
 	 * @brief Даёт C++-коду точку подписки на начальное значение и дальнейшие изменения.
@@ -86,19 +94,39 @@ public:
 	FCombatDeath& OnDeath() { return Death; }
 
 private:
+	friend class UCombatSession;
+
 	/**
-	 * @brief Максимум здоровья, заданный один раз на экземпляре компонента.
-	 *
-	 * Ноль обозначает ожидание инициализации. Видно у экземпляра в Details.
-	 * Transient исключает поле из обычного сохранения объекта.
+	 * @brief Проверяет набор, прежде чем сессия начнёт инициализацию обоих участников.
+	 * @param[in] InBaseAttributes Готовые базовые значения участника.
+	 * @param[in] InCurrentHealth Стартовое текущее здоровье.
+	 * @return true для незаполненного компонента и допустимого набора значений.
 	 */
-	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Combat|Health")
-	float MaxHealth = 0.0f;
+	bool CanInitializeAttributes(const FCombatBaseAttributes& InBaseAttributes, float InCurrentHealth) const;
+
+	/**
+	 * @brief Записывает подготовленные данные перед отправкой событий.
+	 * @param[in] InBaseAttributes Готовые базовые значения участника.
+	 * @param[in] InCurrentHealth Стартовое текущее здоровье.
+	 * @pre CanInitializeAttributes() подтвердил входные данные.
+	 */
+	void SetInitialAttributes(const FCombatBaseAttributes& InBaseAttributes, float InCurrentHealth);
+
+	/** @brief Оповещает подписчиков после записи начальных характеристик. */
+	void PublishInitialHealth();
+
+	/**
+	 * @brief Копия базовых характеристик, заданная при инициализации экземпляра.
+	 *
+	 * Нулевой максимум означает ожидание данных. Transient оставляет значения состоянием текущего боя.
+	 */
+	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Combat|Attributes")
+	FCombatBaseAttributes BaseAttributes;
 
 	/**
 	 * @brief Остаток здоровья, доступный для просмотра у экземпляра в Details.
 	 *
-	 * Задаётся при InitializeHealth() и уменьшается через ApplyDamage().
+	 * Задаётся вместе с базовыми характеристиками и уменьшается через ApplyDamage().
 	 * До инициализации ноль означает отсутствие данных о здоровье.
 	 */
 	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Combat|Health")

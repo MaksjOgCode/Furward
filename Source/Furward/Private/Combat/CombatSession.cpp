@@ -7,6 +7,7 @@
 
 #include "Combat/CombatSession.h"
 #include "Combat/CombatArena.h"
+#include "Combat/CombatAttributesComponent.h"
 #include "Combat/CombatEnemy.h"
 #include "Combat/CombatEnemyDefinition.h"
 #include "Combat/CombatHero.h"
@@ -106,11 +107,10 @@ void UCombatSession::HandleEnvironmentShown()
     SpawnHero(*World, *FoundArena);
     SpawnEnemy(*World, *FoundArena);
 
-    // Открываем приём команд только после успешного спауна обоих участников. Готовность видна в логе.
+    // Готовая расстановка остаётся в Preparing, пока сессия не получит характеристики обоих участников.
     if (Hero.IsValid() && Enemy.IsValid())
     {
-        Phase = ECombatPhase::Ready;
-        UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Ready"));
+        UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; waiting for participant attributes."));
     }
 }
 
@@ -203,6 +203,38 @@ const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 	return Enemy.Get();
 }
 
+bool UCombatSession::InitializeParticipantAttributes(const FCombatBaseAttributes& HeroBase, float HeroCurrentHealth,
+	const FCombatBaseAttributes& EnemyBase)
+{
+	// Принимаем данные после появления арены и обоих участников.
+	if (Phase != ECombatPhase::Preparing || !Hero.IsValid() || !Enemy.IsValid() || !ActiveArena.IsValid() ||
+		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
+	{
+		return false;
+	}
+
+	UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
+	UCombatAttributesComponent& EnemyAttributes = Enemy->GetAttributes();
+	// Проверяем оба набора до записи. Герой получает переданное HP, новый противник начинает с полным HP.
+	if (!HeroAttributes.CanInitializeAttributes(HeroBase, HeroCurrentHealth) ||
+		!EnemyAttributes.CanInitializeAttributes(EnemyBase, EnemyBase.MaxHealth))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Participant attributes rejected; combat is still Preparing."));
+		return false;
+	}
+
+	// Заполняем оба компонента и только затем сообщаем подписчикам о начальном здоровье.
+	HeroAttributes.SetInitialAttributes(HeroBase, HeroCurrentHealth);
+	EnemyAttributes.SetInitialAttributes(EnemyBase, EnemyBase.MaxHealth);
+	Phase = ECombatPhase::Ready;
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Ready; Hero HP %.2f/%.2f; Enemy HP %.2f/%.2f"),
+		HeroAttributes.GetCurrentHealth(), HeroAttributes.GetMaxHealth(),
+		EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth());
+	HeroAttributes.PublishInitialHealth();
+	EnemyAttributes.PublishInitialHealth();
+	return true;
+}
+
 bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const ACombatEnemy* Target)
 {
 	// Допускаем только результаты, которые образуют команду. Ignore отбрасывается и при прямом вызове метода.
@@ -223,6 +255,12 @@ bool UCombatSession::TrySubmitClickAttack(ECombatClickResult Result, const AComb
 	if (!IsValid(Target) || Target != Enemy.Get())
 	{
 		UE_LOG(LogCombatSession, Verbose, TEXT("Click attack rejected: target is not the active enemy."));
+		return false;
+	}
+
+	// Запрос относится только к живым участникам, даже если актор после смерти ещё находится на карте.
+	if (Hero->GetAttributes().IsDead() || Target->GetAttributes().IsDead())
+	{
 		return false;
 	}
 

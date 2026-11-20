@@ -2,15 +2,18 @@
 
 /**
  * @file
- * @brief Проверяет на L_Combat, какие запросы кликовой атаки принимает боевая сессия.
+ * @brief Проверяет инициализацию участников на L_Combat и допуск запросов кликовой атаки.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Combat/CombatAttributesComponent.h"
 #include "Combat/CombatEnemy.h"
 #include "Combat/CombatGameMode.h"
+#include "Combat/CombatHero.h"
 #include "Combat/CombatSession.h"
 #include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
@@ -43,6 +46,44 @@ bool FVerifyCombatClickCommands::Update()
 		Test->AddError(TEXT("L_Combat did not prepare an active enemy."));
 		return true;
 	}
+
+	ACombatHero* Hero = Cast<ACombatHero>(UGameplayStatics::GetActorOfClass(World, ACombatHero::StaticClass()));
+	if (!Test->TestNotNull(TEXT("The combat hero was spawned"), Hero))
+	{
+		return true;
+	}
+
+	// Имитируем два независимых источника готовых характеристик.
+	const FCombatBaseAttributes HeroBase{120.0f, 22.0f, 7.0f};
+	const FCombatBaseAttributes EnemyBase{85.0f, 12.0f, 4.0f};
+	UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
+	UCombatAttributesComponent& EnemyAttributes = Target->GetAttributes();
+	Test->TestFalse(TEXT("Spawn alone does not authorize Hit"),
+		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
+	Test->TestFalse(TEXT("Invalid enemy attributes prevent initialization"),
+		Session->InitializeParticipantAttributes(HeroBase, 70.0f, FCombatBaseAttributes{}));
+	Test->TestFalse(TEXT("Invalid enemy attributes leave the hero uninitialized"), HeroAttributes.IsHealthInitialized());
+	Test->TestFalse(TEXT("Invalid enemy attributes leave the enemy uninitialized"), EnemyAttributes.IsHealthInitialized());
+
+	// Первое уведомление уже видит заполненные характеристики обоих участников.
+	const FDelegateHandle HeroHealthHandle = HeroAttributes.OnHealthChanged().AddLambda(
+		[Test = Test, &EnemyAttributes](float Previous, float Current)
+		{
+			Test->TestTrue(TEXT("Both participants are initialized before the first health event"),
+				EnemyAttributes.IsHealthInitialized());
+		});
+	const bool bPrepared = Session->InitializeParticipantAttributes(HeroBase, 70.0f, EnemyBase);
+	HeroAttributes.OnHealthChanged().Remove(HeroHealthHandle);
+	if (!Test->TestTrue(TEXT("Valid attributes bring the session to Ready"), bPrepared))
+	{
+		return true;
+	}
+	Test->TestEqual(TEXT("Hero starts at the supplied current health"), HeroAttributes.GetCurrentHealth(), 70.0f);
+	Test->TestEqual(TEXT("Hero retains the supplied damage"), HeroAttributes.GetBaseAttributes().DamagePerHit, HeroBase.DamagePerHit);
+	Test->TestEqual(TEXT("New enemy starts at its own full health"), EnemyAttributes.GetCurrentHealth(), EnemyBase.MaxHealth);
+	Test->TestEqual(TEXT("Enemy retains the supplied armor"), EnemyAttributes.GetBaseAttributes().Armor, EnemyBase.Armor);
+	Test->TestFalse(TEXT("A prepared session does not overwrite its attributes"),
+		Session->InitializeParticipantAttributes(HeroBase, HeroBase.MaxHealth, EnemyBase));
 
 	// Проверяем оба допустимых исхода для текущей цели и исключаем Ignore и пустую цель.
 	Test->TestTrue(TEXT("Ready accepts Hit for the active enemy"),

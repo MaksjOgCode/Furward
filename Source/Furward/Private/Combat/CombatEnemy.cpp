@@ -68,6 +68,11 @@ ACombatEnemy::ACombatEnemy()
 	ConfigureClickArea(*MissArea, GetRootComponent(), FColor::Yellow);
 }
 
+UCombatAttributesComponent& ACombatEnemy::GetAttributes() const
+{
+	return *Attributes;
+}
+
 void ACombatEnemy::ApplyDefinition(const UCombatEnemyDefinition& Definition)
 {
 	// Трансформ модели из описания сохраняет авторский поворот, масштаб и смещение от точки спауна.

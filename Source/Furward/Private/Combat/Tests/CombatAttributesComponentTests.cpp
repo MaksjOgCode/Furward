@@ -23,12 +23,13 @@ bool FCombatAttributesHealthTest::RunTest(const FString& Parameters)
 
 	// Проверяем исходное состояние и отказ на некорректных входных данных.
 	const float NaN = std::numeric_limits<float>::quiet_NaN();
+	const FCombatBaseAttributes Base{100.0f, 20.0f, 5.0f};
 	TestFalse(TEXT("Health starts uninitialized"), Attributes->IsHealthInitialized());
 	TestFalse(TEXT("An uninitialized participant is not dead"), Attributes->IsDead());
 	TestEqual(TEXT("Damage before initialization removes no health"), Attributes->ApplyDamage(25.0f), 0.0f);
-	TestFalse(TEXT("Maximum health must be positive"), Attributes->InitializeHealth(0.0f, 20.0f));
-	TestFalse(TEXT("Starting health must be positive"), Attributes->InitializeHealth(100.0f, 0.0f));
-	TestFalse(TEXT("Non-finite maximum is rejected"), Attributes->InitializeHealth(NaN, 20.0f));
+	TestFalse(TEXT("Maximum health must be positive"), Attributes->InitializeAttributes(FCombatBaseAttributes{}, 20.0f));
+	TestFalse(TEXT("Starting health must be positive"), Attributes->InitializeAttributes(Base, 0.0f));
+	TestFalse(TEXT("Non-finite maximum is rejected"), Attributes->InitializeAttributes(FCombatBaseAttributes{NaN, 20.0f, 5.0f}, 20.0f));
 
 	// Слушатели позволяют проверить как значения, так и порядок событий одного удара.
 	TArray<TPair<float, float>> HealthChanges;
@@ -47,9 +48,11 @@ bool FCombatAttributesHealthTest::RunTest(const FString& Parameters)
 		});
 
 	// Числа здесь служат только входными данными теста. Проверяем ограничение максимальным и нулевым здоровьем.
-	TestTrue(TEXT("Valid data initializes health"), Attributes->InitializeHealth(100.0f, 125.0f));
+	TestTrue(TEXT("Valid data initializes health"), Attributes->InitializeAttributes(Base, 125.0f));
 	TestTrue(TEXT("Maximum health marks initialization"), Attributes->IsHealthInitialized());
 	TestEqual(TEXT("Maximum health is saved"), Attributes->GetMaxHealth(), 100.0f);
+	TestEqual(TEXT("Base damage is saved"), Attributes->GetBaseAttributes().DamagePerHit, Base.DamagePerHit);
+	TestEqual(TEXT("Base armor is saved"), Attributes->GetBaseAttributes().Armor, Base.Armor);
 	TestEqual(TEXT("Starting health is clamped to the maximum"), Attributes->GetCurrentHealth(), 100.0f);
 	TestEqual(TEXT("A nonlethal hit removes its amount"), Attributes->ApplyDamage(25.0f), 25.0f);
 	TestEqual(TEXT("Negative damage is rejected"), Attributes->ApplyDamage(-2.0f), 0.0f);
@@ -58,7 +61,7 @@ bool FCombatAttributesHealthTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Lethal damage stops at zero"), Attributes->GetCurrentHealth(), 0.0f);
 	TestTrue(TEXT("Zero health marks death"), Attributes->IsDead());
 	TestEqual(TEXT("A second hit on the dead participant removes nothing"), Attributes->ApplyDamage(10.0f), 0.0f);
-	TestFalse(TEXT("Initialization cannot revive the same instance"), Attributes->InitializeHealth(100.0f, 100.0f));
+	TestFalse(TEXT("Initialization cannot revive the same instance"), Attributes->InitializeAttributes(Base, 100.0f));
 
 	// В списке остаются инициализация и два эффективных попадания.
 	TestEqual(TEXT("Death is sent once"), DeathCount, 1);

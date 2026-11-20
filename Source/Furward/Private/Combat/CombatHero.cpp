@@ -19,3 +19,8 @@ ACombatHero::ACombatHero()
 	// Каждый экземпляр героя получает собственное состояние здоровья.
 	Attributes = CreateDefaultSubobject<UCombatAttributesComponent>(TEXT("Attributes"));
 }
+
+UCombatAttributesComponent& ACombatHero::GetAttributes() const
+{
+	return *Attributes;
+}
