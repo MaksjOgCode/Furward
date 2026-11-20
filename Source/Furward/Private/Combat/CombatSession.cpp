@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Готовит столкновения, фиксирует исход и продолжает этапы после подтверждения сохранения.
+ * @brief Готовит столкновения, фиксирует исход и ждёт записи перед сменой этапа или выходом.
  */
 
 #include "Combat/CombatSession.h"
@@ -47,49 +47,71 @@ void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
 bool UCombatSession::RequestNextStage(FName SaveSlot)
 {
 	const UWorld* World = GetOuter()->GetWorld();
-	UFurwardProfileSubsystem* Profile = GetProfile();
+	const UFurwardProfileSubsystem* Profile = GetProfile();
 	if (!bPIECombatPreview || !World || World->IsPaused() || Phase != ECombatPhase::StageCompleted ||
-		!PendingNextStageID.IsNone() || !Profile || !Profile->IsExpeditionStageCompleted(ActiveStageID) ||
-		SaveSlot.IsNone() || (!PIEProgressSlot.IsNone() && PIEProgressSlot != SaveSlot))
+		!Profile || !Profile->IsExpeditionStageCompleted(ActiveStageID))
 	{
 		return false;
 	}
 
 	FName NextStageID;
-	if (!FindNextStageOnActiveArena(NextStageID))
+	return FindNextStageOnActiveArena(NextStageID) &&
+		BeginPIEProgressSave(SaveSlot, EProgressSaveAction::NextStage, NextStageID);
+}
+
+bool UCombatSession::RequestExitCombat(FName SaveSlot)
+{
+	return BeginPIEProgressSave(SaveSlot, EProgressSaveAction::Exit);
+}
+
+bool UCombatSession::BeginPIEProgressSave(FName Slot, EProgressSaveAction Action, FName NextStageID)
+{
+	const bool bSavePending = PendingSaveAction != EProgressSaveAction::None;
+	const bool bExit = Action == EProgressSaveAction::Exit;
+	if (!bPIECombatPreview || bShutdown || Slot.IsNone() || (!PIEProgressSlot.IsNone() && PIEProgressSlot != Slot) ||
+		(bSavePending && (!bExit || PendingSaveAction != EProgressSaveAction::NextStage)))
 	{
 		return false;
 	}
 
-	UFurwardSaveSubsystem* Save = UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(World->GetGameInstance());
-	if (!Save || (PIEProgressSlot.IsNone() &&
-		UGameplayStatics::DoesSaveGameExist(SaveSlot.ToString(), UFurwardSaveSubsystem::LocalUserIndex)))
+	const UWorld* World = GetOuter()->GetWorld();
+	const UFurwardProfileSubsystem* Profile = GetProfile();
+	UFurwardSaveSubsystem* Save = World ? UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(World->GetGameInstance()) : nullptr;
+	if (!Profile || !Save || (PIEProgressSlot.IsNone() &&
+		UGameplayStatics::DoesSaveGameExist(Slot.ToString(), UFurwardSaveSubsystem::LocalUserIndex)))
 	{
 		return false;
 	}
 
 	FFurwardProfileSnapshot Snapshot = Profile->CreateSnapshot();
 	const int64 Revision = Snapshot.Revision;
+	if (!bSavePending)
+	{
+		if (!Save->RequestSave(Slot, MoveTemp(Snapshot)))
+		{
+			return false;
+		}
+		ProgressSaveSubsystem = Save;
+		ProgressSaveListener = Save->OnSaveFinished().AddUObject(this, &UCombatSession::HandleProgressSaveFinished);
+	}
+
+	PIEProgressSlot = Slot;
+	PendingSaveAction = Action;
 	PendingNextStageID = NextStageID;
-	StageSaveSubsystem = Save;
-	StageSaveListener = Save->OnSaveFinished().AddUObject(this, &UCombatSession::HandleStageSaveFinished);
-	const FName PreviousSlot = PIEProgressSlot;
-	PIEProgressSlot = SaveSlot;
-
-	if (Save->GetSaveStatus(SaveSlot).IsLatestRevisionSaved(Revision))
+	if (bExit)
 	{
-		HandleStageSaveFinished(SaveSlot, Revision, true);
-		return true;
+		Phase = ECombatPhase::Leaving;
+		StopPIEEnemyAttacks();
+		UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Leaving; Awaiting save revision: %lld"), Revision);
+	}
+	else
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("Stage transition awaiting save: %s -> %s; Revision: %lld"),
+			*ActiveStageID.ToString(), *NextStageID.ToString(), Revision);
 	}
 
-	UE_LOG(LogCombatSession, Display, TEXT("Stage transition awaiting save: %s -> %s; Revision: %lld"),
-		*ActiveStageID.ToString(), *NextStageID.ToString(), Revision);
-	if (!Save->RequestSave(SaveSlot, MoveTemp(Snapshot)))
-	{
-		ResetPendingStageTransition();
-		PIEProgressSlot = PreviousSlot;
-		return false;
-	}
+	// Сверяем статус сразу на случай уже записанной ревизии или синхронной ошибки запуска записи.
+	CheckPendingProgressSave();
 	return true;
 }
 
@@ -120,56 +142,78 @@ const FCombatStageRow* UCombatSession::FindNextStageOnActiveArena(FName& NextSta
 	return Next;
 }
 
-void UCombatSession::HandleStageSaveFinished(FName Slot, int64 WrittenRevision, bool bSuccess)
+void UCombatSession::HandleProgressSaveFinished(FName Slot, int64 /*WrittenRevision*/, bool /*bSuccess*/)
 {
-	if (Phase != ECombatPhase::StageCompleted || PendingNextStageID.IsNone() || Slot != PIEProgressSlot)
+	if (Slot == PIEProgressSlot && PendingSaveAction != EProgressSaveAction::None)
 	{
-		return;
+		CheckPendingProgressSave();
 	}
+}
 
-	UFurwardSaveSubsystem* Save = StageSaveSubsystem.Get();
-	UFurwardProfileSubsystem* Profile = GetProfile();
+void UCombatSession::CheckPendingProgressSave()
+{
+	UFurwardSaveSubsystem* Save = ProgressSaveSubsystem.Get();
+	const UFurwardProfileSubsystem* Profile = GetProfile();
 	if (!Save || !Profile)
 	{
-		ResetPendingStageTransition();
+		ResetPendingProgressSave();
 		return;
 	}
 
-	const FFurwardSaveStatus Status = Save->GetSaveStatus(Slot);
-	if (!bSuccess && Status.bLatestWriteFailed && WrittenRevision == Status.LatestRequestedRevision)
-	{
-		UE_LOG(LogCombatSession, Warning, TEXT("Stage transition save failed; request the next stage again to retry."));
-		ResetPendingStageTransition();
-		return;
-	}
-
+	const FFurwardSaveStatus Status = Save->GetSaveStatus(PIEProgressSlot);
+	const bool bExit = PendingSaveAction == EProgressSaveAction::Exit;
 	FFurwardProfileSnapshot Snapshot = Profile->CreateSnapshot();
 	if (Status.IsLatestRevisionSaved(Snapshot.Revision))
 	{
 		const FName NextStageID = PendingNextStageID;
-		ResetPendingStageTransition();
-		UE_LOG(LogCombatSession, Display, TEXT("Stage transition save confirmed: %s; Revision: %lld"),
-			*NextStageID.ToString(), Status.LastSavedRevision);
-		BeginNextStageOnActiveArena(NextStageID);
-	}
-	else if (Snapshot.Revision > Status.LatestRequestedRevision)
-	{
-		// Новая ревизия могла появиться, пока платформа записывала предыдущий снимок.
-		if (!Save->RequestSave(Slot, MoveTemp(Snapshot)))
+		ResetPendingProgressSave();
+		if (bExit)
 		{
-			ResetPendingStageTransition();
+			UE_LOG(LogCombatSession, Display, TEXT("Combat exit save confirmed: Revision %lld"), Status.LastSavedRevision);
+			FinishCombatExit();
 		}
+		else
+		{
+			UE_LOG(LogCombatSession, Display, TEXT("Stage transition save confirmed: %s; Revision: %lld"),
+				*NextStageID.ToString(), Status.LastSavedRevision);
+			BeginNextStageOnActiveArena(NextStageID);
+		}
+	}
+	else if (Status.bLatestWriteFailed || (Snapshot.Revision > Status.LatestRequestedRevision &&
+		!Save->RequestSave(PIEProgressSlot, MoveTemp(Snapshot))))
+	{
+		if (bExit)
+		{
+			UE_LOG(LogCombatSession, Warning, TEXT("Combat exit save failed; request the exit again to retry."));
+		}
+		else
+		{
+			UE_LOG(LogCombatSession, Warning, TEXT("Stage transition save failed; request the next stage again to retry."));
+		}
+		ResetPendingProgressSave();
 	}
 }
 
-void UCombatSession::ResetPendingStageTransition()
+void UCombatSession::FinishCombatExit()
 {
-	if (UFurwardSaveSubsystem* Save = StageSaveSubsystem.Get())
+	UWorld* World = GetOuter()->GetWorld();
+	ACombatPlayerController* Controller = World ? World->GetFirstPlayerController<ACombatPlayerController>() : nullptr;
+	Shutdown();
+	if (IsValid(Controller))
 	{
-		Save->OnSaveFinished().Remove(StageSaveListener);
+		Controller->NotifyCombatExitReady();
 	}
-	StageSaveListener.Reset();
-	StageSaveSubsystem.Reset();
+}
+
+void UCombatSession::ResetPendingProgressSave()
+{
+	if (UFurwardSaveSubsystem* Save = ProgressSaveSubsystem.Get())
+	{
+		Save->OnSaveFinished().Remove(ProgressSaveListener);
+	}
+	ProgressSaveListener.Reset();
+	ProgressSaveSubsystem.Reset();
+	PendingSaveAction = EProgressSaveAction::None;
 	PendingNextStageID = NAME_None;
 }
 
@@ -903,11 +947,18 @@ bool UCombatSession::CanUseCurrentEnemy(const ACombatEnemy* Target) const
 	return true;
 }
 
-void UCombatSession::Shutdown() {
-	// Сначала блокируем новые команды. Постоянный уровень продолжает владеть участниками до завершения мира.
+void UCombatSession::Shutdown()
+{
+	if (bShutdown)
+	{
+		return;
+	}
+	bShutdown = true;
+
+	// Постоянный уровень продолжает владеть участниками до завершения мира.
 	Phase = ECombatPhase::Leaving;
 #if WITH_EDITOR
-	ResetPendingStageTransition();
+	ResetPendingProgressSave();
 	PIEProgressSlot = NAME_None;
 	StopPIEEnemyAttacks();
 #endif

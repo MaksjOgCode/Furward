@@ -15,10 +15,14 @@
 
 class ACombatArena;
 class ACombatEnemy;
+class UCombatSession;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputAction;
 class UInputMappingContext;
 enum class ECombatClickResult : uint8;
+
+/** @brief Сигнал о завершении боя после записи актуальной ревизии профиля. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCombatExitReady);
 
 
 
@@ -50,6 +54,21 @@ public:
 	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Stage")
 	bool RequestNextStage(FName SaveSlot);
 
+	/**
+	 * @brief Передаёт сессии подтверждение выхода из пробного боя.
+	 * @param[in] SaveSlot Выделенный слот текущего прогона PIE.
+	 * @return true, если сессия приняла выход или повтор записи после ошибки.
+	 */
+	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Session")
+	bool RequestExitCombat(FName SaveSlot);
+
+	/** @brief Сессия вызывает метод после записи и освобождения боевых ресурсов. */
+	void NotifyCombatExitReady();
+
+	/** @brief Даёт Blueprint точку подключения перехода карты после подтверждения сохранения. */
+	UPROPERTY(BlueprintAssignable, Category = "Combat|Session")
+	FOnCombatExitReady OnCombatExitReady;
+
 protected:
 	/**
 	 * @brief Показывает курсор и включает GameAndUI при начале игры.
@@ -74,6 +93,9 @@ protected:
 	void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** @brief Получает сессию из GameMode текущего мира для передачи боевой команды. */
+	UCombatSession* GetActiveCombatSession() const;
+
 	/**
 	 * @brief Преобразует начало IA_Combat_Click в запрос к текущей сессии.
 	 *

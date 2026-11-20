@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подключает ввод и камеру и передаёт сессии клики и команду продолжения этапа.
+ * @brief Подключает ввод и камеру, передаёт сессии команды и публикует готовность к выходу из боя.
  */
 
 #include "Combat/CombatPlayerController.h"
@@ -43,13 +43,34 @@ void ACombatPlayerController::UseArenaCamera(ACombatArena* Arena) {
 bool ACombatPlayerController::RequestNextStage(FName SaveSlot)
 {
 #if WITH_EDITOR
-	const UWorld* World = GetWorld();
-	ACombatGameMode* GameMode = World ? World->GetAuthGameMode<ACombatGameMode>() : nullptr;
-	UCombatSession* Session = GameMode ? GameMode->GetCombatSession() : nullptr;
+	UCombatSession* Session = GetActiveCombatSession();
 	return Session && Session->RequestNextStage(SaveSlot);
 #else
 	return false;
 #endif
+}
+
+bool ACombatPlayerController::RequestExitCombat(FName SaveSlot)
+{
+#if WITH_EDITOR
+	UCombatSession* Session = GetActiveCombatSession();
+	return Session && Session->RequestExitCombat(SaveSlot);
+#else
+	return false;
+#endif
+}
+
+void ACombatPlayerController::NotifyCombatExitReady()
+{
+	UE_LOG(LogCombatPlayerController, Display, TEXT("Combat exit ready: %s"), *GetName());
+	OnCombatExitReady.Broadcast();
+}
+
+UCombatSession* ACombatPlayerController::GetActiveCombatSession() const
+{
+	const UWorld* World = GetWorld();
+	ACombatGameMode* GameMode = World ? World->GetAuthGameMode<ACombatGameMode>() : nullptr;
+	return GameMode ? GameMode->GetCombatSession() : nullptr;
 }
 
 void ACombatPlayerController::BeginPlay() {
@@ -93,10 +114,8 @@ void ACombatPlayerController::SetupInputComponent()
 
 void ACombatPlayerController::HandleCombatClick()
 {
-	// Берём сессию из GameMode текущего мира. Без неё клик некуда передать.
-	UWorld* World = GetWorld();
-	ACombatGameMode* GameMode = World ? World->GetAuthGameMode<ACombatGameMode>() : nullptr;
-	UCombatSession* Session = GameMode ? GameMode->GetCombatSession() : nullptr;
+	// Передаём клик сессии текущего мира.
+	UCombatSession* Session = GetActiveCombatSession();
 	if (!Session)
 	{
 		return;

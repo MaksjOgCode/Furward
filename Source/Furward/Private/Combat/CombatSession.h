@@ -58,7 +58,7 @@ enum class ECombatPhase : uint8
 	Defeated,
 	/** @brief Профиль подтвердил победу над боссом, сессия ждёт выбора следующего этапа. */
 	StageCompleted,
-	/** @brief Сессия блокирует команды и освобождает ссылки при завершении. */
+	/** @brief Сессия остановила атаки и ждёт сохранения перед завершением. */
 	Leaving
 };
 
@@ -68,7 +68,7 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия фиксирует исход, управляет таймером атак и в пробной экспедиции ждёт сохранения перед сменой этапа.
+ * Сессия фиксирует исход и управляет таймером атак. В пробной экспедиции смена этапа и выход ждут записи профиля.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -98,6 +98,14 @@ public:
 	 * @post До подтверждения актуальной ревизии сессия остаётся в StageCompleted.
 	 */
 	bool RequestNextStage(FName SaveSlot);
+
+	/**
+	 * @brief Принимает подтверждённый выход из пробного боя и переводит сессию в Leaving.
+	 * @param[in] SaveSlot Имя выделенного слота этой проверки PIE.
+	 * @return true, если сохранение перед выходом принято или очередь уже ждёт его записи.
+	 * @post Атаки остановлены. После ошибки записи ту же команду можно повторить.
+	 */
+	bool RequestExitCombat(FName SaveSlot);
 #endif
 
 	/**
@@ -113,7 +121,7 @@ public:
 	/**
 	 * @brief Блокирует команды, очищает таймер и подписки участников и запрашивает выгрузку окружения.
 	 *
-	 * GameMode вызывает метод в EndPlay() перед освобождением сессии.
+	 * После сохранения при выходе сессия вызывает метод сама. GameMode вызывает его в EndPlay(), повторный вызов безопасен.
 	 * @post Ссылки на сцену, идентификатор и данные исхода текущего столкновения очищены.
 	 * @note Unreal может завершить выгрузку позже.
 	 */
@@ -207,9 +215,12 @@ private:
 	 * Начинается с Preparing, становится Ready после инициализации характеристик,
 	 * Fighting после первого положительного урона или автоматического старта, ChangingEnemy после смерти
 	 * обычного противника, Defeated после смерти героя, StageCompleted после учёта победы над боссом
-	 * и Leaving при Shutdown().
+	 * и Leaving после подтверждения выхода или при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
+
+	/** @brief Отмечает выполненную очистку, когда после подтверждённого выхода движок вызывает EndPlay(). */
+	bool bShutdown = false;
 
 #if WITH_EDITOR
 	/** @brief Разрешение на пробный бой, которое GameMode передаёт при входе в мир PIE. */
@@ -229,13 +240,31 @@ private:
 	 */
 	const FCombatStageRow* FindNextStageOnActiveArena(FName& NextStageID) const;
 
+	/** @brief Действие, которое продолжится после записи актуальной ревизии. */
+	enum class EProgressSaveAction : uint8
+	{
+		None,
+		NextStage,
+		Exit
+	};
+
 	/**
-	 * @brief Принимает результат записи и начинает подготовку после подтверждения актуальной ревизии.
-	 * @param[in] Slot Имя слота, для которого завершилась запись.
-	 * @param[in] WrittenRevision Ревизия этой попытки записи.
-	 * @param[in] bSuccess Подтверждение записи от платформы.
+	 * @brief Связывает действие с пробным слотом и запускает ожидание записи.
+	 * @param[in] Slot Имя слота текущей проверки PIE.
+	 * @param[in] Action Подготовка следующего этапа или подтверждённый выход.
+	 * @param[in] NextStageID Имя следующего этапа, если выбрано продолжение.
+	 * @return true, если действие принято. Подтверждённый выход имеет приоритет над продолжением.
 	 */
-	void HandleStageSaveFinished(FName Slot, int64 WrittenRevision, bool bSuccess);
+	bool BeginPIEProgressSave(FName Slot, EProgressSaveAction Action, FName NextStageID = NAME_None);
+
+	/** @brief При результате записи своего слота повторно сверяет актуальную ревизию профиля. */
+	void HandleProgressSaveFinished(FName Slot, int64 WrittenRevision, bool bSuccess);
+
+	/** @brief Продолжает после подтверждения, запрашивает новый снимок или разрешает повтор команды после ошибки. */
+	void CheckPendingProgressSave();
+
+	/** @brief Освобождает сессию и уведомляет контроллер, что можно начать переход карты. */
+	void FinishCombatExit();
 
 	/**
 	 * @brief Готовит следующую строку на существующей арене после подтверждения записи.
@@ -243,19 +272,22 @@ private:
 	 */
 	void BeginNextStageOnActiveArena(FName StageID);
 
-	/** @brief Снимает подписку и освобождает запрос перехода, включая ожидание при Shutdown(). */
-	void ResetPendingStageTransition();
+	/** @brief Снимает подписку и очищает действие, в том числе при Shutdown(). */
+	void ResetPendingProgressSave();
 
 	/** @brief Подсистема записи, на которую подписана сессия во время ожидания. */
-	TWeakObjectPtr<UFurwardSaveSubsystem> StageSaveSubsystem;
+	TWeakObjectPtr<UFurwardSaveSubsystem> ProgressSaveSubsystem;
 
-	/** @brief Дескриптор подписки на результат записи выбранного слота. */
-	FDelegateHandle StageSaveListener;
+	/** @brief Дескриптор подписки на результаты записи. */
+	FDelegateHandle ProgressSaveListener;
 
 	/** @brief Выделенный слот проверки, уже принятый этой сессией. */
 	FName PIEProgressSlot;
 
-	/** @brief Строка, которую сессия подготавливает после подтверждения актуального сохранения. */
+	/** @brief Действие, которое ждёт сохранения актуальной ревизии. */
+	EProgressSaveAction PendingSaveAction = EProgressSaveAction::None;
+
+	/** @brief Строка, которую сессия подготавливает после записи при продолжении этапов. */
 	FName PendingNextStageID;
 
 	/**
