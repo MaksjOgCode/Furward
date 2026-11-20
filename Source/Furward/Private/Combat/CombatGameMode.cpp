@@ -1,6 +1,7 @@
 // Copyright © 2026 Maksj.OG
 
 #include "CombatGameMode.h"
+#include "CombatEnemyDefinition.h"
 #include "CombatEnvironmentDefinition.h"
 #include "CombatSession.h"
 #include "UObject/UObjectGlobals.h"
@@ -13,7 +14,7 @@ void ACombatGameMode::InitGame(const FString& MapName, const FString& Options, F
 	Super::InitGame(MapName, Options, ErrorMessage);
 
 	CombatSession = NewObject <UCombatSession> (this);
-	CombatSession->Initialize();
+	CombatSession->Initialize(HeroClass, InitialEnemy.Get());
 }
 
 void ACombatGameMode::BeginPlay() {

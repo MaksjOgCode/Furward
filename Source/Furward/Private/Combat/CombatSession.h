@@ -12,6 +12,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/SubclassOf.h"
 #include "UObject/Object.h"
 #include "CombatSession.generated.h"
 
@@ -20,6 +21,9 @@
 class ULevelStreamingDynamic;
 class UWorld;
 class ACombatArena;
+class ACombatHero;
+class ACombatEnemy;
+class UCombatEnemyDefinition;
 
 
 
@@ -34,12 +38,13 @@ class UCombatSession : public UObject
 	GENERATED_BODY()
 public:
 	/**
-	 * Записывает в лог начало работы сессии и имя её GameMode.
+	 * Сохраняет класс героя и описание первого противника для подготовки сцены.
 	 *
-	 * @pre Сессия создана с ACombatGameMode в качестве Outer.
-	 * @see ACombatGameMode::InitGame
+	 * @param InHeroClass Класс героя из настроек GameMode.
+	 * @param InInitialEnemy Описание первого противника из настроек GameMode.
+	 * @pre Сессия создана с ACombatGameMode в качестве Outer
 	 */
-	void Initialize();
+	void Initialize(TSubclassOf<ACombatHero> InHeroClass, UCombatEnemyDefinition* InInitialEnemy);
 
 	/**
 	* Запрашивает подгрузку стартового окружения с исходной расстановкой объектов.
@@ -49,10 +54,10 @@ public:
 	*/
 	void RequestInitialEnvironment (UObject* WorldContextObject, const TSoftObjectPtr <UWorld>& EnvironmentMap);
 
-	/** Снимает подписку на показ уровня и запрашивает удаление окружения из мира */
+	/** Освобождает ссылки на участников и арену, снимает подписку и запрашивает выгрузку окружения. */
 	void Shutdown();
 private:
-	/** Регистрирует единственную арену показанного уровня и передаёт её контроллеру */
+	/** Регистрирует единственную арену показанного уровня, передаёт её контроллеру и создаёт участников. */
 	UFUNCTION()
 	void HandleEnvironmentShown();
 
@@ -63,4 +68,26 @@ private:
 	/** Арена активного окружения. Экземпляр принадлежит подгруженному уровню */
 	UPROPERTY(Transient)
 	TWeakObjectPtr <ACombatArena> ActiveArena;
+
+	/** Создаёт одного героя в постоянном уровне по мировой точке арены. */
+	void SpawnHero(UWorld& World, const ACombatArena& Arena);
+
+	/** Создаёт противника из описания вида по точке активной арены в L_Combat. */
+	void SpawnEnemy(UWorld& World, const ACombatArena& Arena);
+
+	/** Класс, из которого сессия создаёт героя. */
+	UPROPERTY(Transient)
+	TSubclassOf<ACombatHero> HeroClass;
+
+	/** Экземпляр героя, принадлежащий постоянному уровню. */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACombatHero> Hero;
+
+	/** Описание первого противника, переданное при запуске карты. */
+	UPROPERTY(Transient)
+	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
+
+	/** Текущий противник. Экземпляр принадлежит постоянному уровню. */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACombatEnemy> Enemy;
 };

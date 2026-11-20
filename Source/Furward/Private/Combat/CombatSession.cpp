@@ -2,9 +2,13 @@
 
 #include "Combat/CombatSession.h"
 #include "Combat/CombatArena.h"
+#include "Combat/CombatEnemy.h"
+#include "Combat/CombatEnemyDefinition.h"
+#include "Combat/CombatHero.h"
 #include "Combat/CombatPlayerController.h"
 #include "Engine/Level.h"
 #include "Engine/LevelStreamingDynamic.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 
 
@@ -97,13 +101,86 @@ void UCombatSession::HandleEnvironmentShown()
 
     // Арена найдена, контроллер готов. Используем камеру арены:
     Controller->UseArenaCamera(FoundArena);
+    SpawnHero(*World, *FoundArena);
+    SpawnEnemy(*World, *FoundArena);
 }
 
-void UCombatSession::Initialize() {
+void UCombatSession::SpawnHero(UWorld& World, const ACombatArena& Arena)
+{
+	if (Hero.IsValid())
+	{
+		return;
+	}
+
+	if (!HeroClass)
+	{
+		UE_LOG(LogCombatSession, Error, TEXT("Combat hero class is not configured."));
+		return;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.OverrideLevel = World.PersistentLevel.Get();
+
+	ACombatHero* SpawnedHero = World.SpawnActor<ACombatHero>(
+		HeroClass.Get(), Arena.GetSpawnHeroTransform(), SpawnParams);
+
+	if (!IsValid(SpawnedHero))
+	{
+		UE_LOG(LogCombatSession, Error, TEXT("Could not spawn the combat hero."));
+		return;
+	}
+
+	Hero = SpawnedHero;
+
+	UE_LOG(LogCombatSession, Display, TEXT("Hero spawned: %s in %s"),
+		*SpawnedHero->GetName(), *SpawnedHero->GetLevel()->GetOutermost()->GetName());
+}
+
+void UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Arena)
+{
+	if (Enemy.IsValid())
+	{
+		return;
+	}
+
+	if (!IsValid(InitialEnemy.Get()) || !InitialEnemy->GetEnemyClass() || !IsValid(InitialEnemy->GetStaticMesh()))
+	{
+		UE_LOG(LogCombatSession, Error, TEXT("Initial enemy definition must specify a class and a static mesh."));
+		return;
+	}
+
+	const FTransform SpawnTransform = Arena.GetSpawnEnemyTransform();
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.OverrideLevel = World.PersistentLevel.Get();
+	SpawnParams.bDeferConstruction = true;
+
+	ACombatEnemy* SpawnedEnemy = World.SpawnActor<ACombatEnemy>(
+		InitialEnemy->GetEnemyClass().Get(), SpawnTransform, SpawnParams);
+
+	if (!IsValid(SpawnedEnemy))
+	{
+		UE_LOG(LogCombatSession, Error, TEXT("Could not spawn the combat enemy."));
+		return;
+	}
+
+	SpawnedEnemy->ApplyDefinition(*InitialEnemy);
+	SpawnedEnemy->FinishSpawning(SpawnTransform);
+	Enemy = SpawnedEnemy;
+
+	UE_LOG(LogCombatSession, Display, TEXT("Enemy spawned: %s in %s using %s"),
+		*SpawnedEnemy->GetName(), *SpawnedEnemy->GetLevel()->GetOutermost()->GetName(), *InitialEnemy->GetName());
+}
+
+void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass, UCombatEnemyDefinition* InInitialEnemy) {
+	HeroClass = InHeroClass;
+	InitialEnemy = InInitialEnemy;
 	UE_LOG( LogCombatSession, Log, TEXT("Initialize: %s; Outer: %s"), *GetName(), *GetOuter()->GetName() );
 }
 
 void UCombatSession::Shutdown() {
+	Hero.Reset();
+	Enemy.Reset();
+	InitialEnemy = nullptr;
 	ActiveArena.Reset();
 
 	// Если объект управления подуровнем ещё действителен:

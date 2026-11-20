@@ -15,12 +15,15 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "UObject/ObjectPtr.h"
+#include "Templates/SubclassOf.h"
 #include "CombatGameMode.generated.h"
 
 
 
 class UCombatSession;
 class UCombatEnvironmentDefinition;
+class ACombatHero;
+class UCombatEnemyDefinition;
 
 
 
@@ -35,7 +38,7 @@ class ACombatGameMode : public AGameModeBase
 	GENERATED_BODY()
 public:
 	/**
-	 * Создаёт и инициализирует боевую сессию до BeginPlay()
+	 * Создаёт боевую сессию и передаёт ей класс героя и описание первого противника до BeginPlay().
 	 *
 	 * @param      MapName      Имя запускаемой карты
 	 * @param      Options      Параметры запуска карты из URL
@@ -58,4 +61,12 @@ private:
 	/** Удерживает сессию с момента создания в InitGame() до освобождения ссылки в EndPlay() */
 	UPROPERTY(Transient)
 	TObjectPtr <UCombatSession> CombatSession = nullptr;
+
+	/** Класс героя, выбранный в настройках BP_Combat_GameMode */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Participants")
+	TSubclassOf <ACombatHero> HeroClass;
+
+	/** Описание первого противника, выбранное в настройках BP_Combat_GameMode. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Participants")
+	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
 };
