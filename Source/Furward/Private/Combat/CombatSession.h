@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает подготовку сцены, время жизни участников и проверку команд в L_Combat.
+ * @brief Описывает выбор этапа, время жизни участников и проверку команд в L_Combat.
  */
 
 #pragma once
@@ -21,6 +21,7 @@ class ACombatHero;
 class ACombatEnemy;
 class UCombatEnemyDefinition;
 struct FCombatBaseAttributes;
+struct FDataTableRowHandle;
 
 /** @brief Результат проверки луча от курсора, который контроллер вычисляет перед отправкой команды. */
 enum class ECombatClickResult : uint8
@@ -58,24 +59,22 @@ class UCombatSession : public UObject
 	GENERATED_BODY()
 public:
 	/**
-	 * @brief Принимает настройки участников от GameMode перед подгрузкой окружения.
+	 * @brief Принимает класс героя от GameMode перед подготовкой этапа.
 	 * @param[in] InHeroClass Класс героя из Class Defaults. Пустой класс остановит спаун героя.
-	 * @param[in] InInitialEnemy Описание первого противника. Пустое описание остановит спаун противника.
 	 * @pre GameMode создал сессию с собой в качестве Outer.
-	 * @post Настройки доступны для спауна по точкам арены.
+	 * @post Класс героя доступен для спауна по точке арены.
 	 */
-	void Initialize(TSubclassOf<ACombatHero> InHeroClass, UCombatEnemyDefinition* InInitialEnemy);
+	void Initialize(TSubclassOf<ACombatHero> InHeroClass);
 
 	/**
-	 * @brief Запрашивает подгрузку начального окружения в фазе Preparing.
+	 * @brief Читает начальный этап и запрашивает подгрузку его окружения.
 	 *
 	 * GameMode вызывает метод в BeginPlay(). Повторный запрос и запрос вне Preparing пропускаются.
-	 * @param[in] WorldContextObject Объект, по которому Unreal находит игровой мир L_Combat.
-	 * @param[in] EnvironmentMap Мягкая ссылка на карту окружения.
-	 * @pre Контекст действителен, карта назначена.
-	 * @note Environment requested означает приём запроса. Появление уровня обрабатывает HandleEnvironmentShown().
+	 * @param[in] WorldContextObject Объект из игрового мира L_Combat.
+	 * @param[in] StageHandle Ссылка на таблицу этапов и имя начальной строки.
+	 * @note Initial combat stage подтверждает выбор строки после принятия запроса. OnLevelShown приходит позже.
 	 */
-	void RequestInitialEnvironment (UObject* WorldContextObject, const TSoftObjectPtr <UWorld>& EnvironmentMap);
+	void RequestInitialStage(UObject* WorldContextObject, const FDataTableRowHandle& StageHandle);
 
 	/**
 	 * @brief Блокирует команды и просит Unreal выгрузить окружение при завершении карты.
@@ -180,9 +179,9 @@ private:
 	TWeakObjectPtr<ACombatHero> Hero;
 
 	/**
-	 * @brief Стартовое описание противника, полученное в Initialize().
+	 * @brief Описание первого противника, прочитанное из строки этапа.
 	 *
-	 * Сессия удерживает ассет до Shutdown(). Без назначения спаун противника пропускается.
+	 * Сессия удерживает ассет от принятия запроса стриминга до Shutdown().
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;

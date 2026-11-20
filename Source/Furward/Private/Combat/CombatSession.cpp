@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подгружает окружение, размещает участников и проверяет запросы кликовой атаки.
+ * @brief Читает строку этапа, подгружает окружение и размещает участников для боевой сессии.
  */
 
 #include "Combat/CombatSession.h"
@@ -10,8 +10,10 @@
 #include "Combat/CombatAttributesComponent.h"
 #include "Combat/CombatEnemy.h"
 #include "Combat/CombatEnemyDefinition.h"
+#include "Combat/CombatEnvironmentDefinition.h"
 #include "Combat/CombatHero.h"
 #include "Combat/CombatPlayerController.h"
+#include "Combat/CombatStageRow.h"
 #include "Engine/Level.h"
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/StaticMesh.h"
@@ -23,13 +25,25 @@ DEFINE_LOG_CATEGORY_STATIC( LogCombatSession, Log, All );
 
 
 
-void UCombatSession::RequestInitialEnvironment(UObject * WorldContextObject, const TSoftObjectPtr <UWorld>& EnvironmentMap) {
+void UCombatSession::RequestInitialStage(UObject* WorldContextObject, const FDataTableRowHandle& StageHandle)
+{
 	// В Preparing допускаем один отслеживаемый запрос на начальное окружение.
 	if (Phase != ECombatPhase::Preparing || EnvironmentStreaming) {
 		UE_LOG( LogCombatSession, Log, TEXT("Initial environment request is not available.") );
 		return;
 	}
 
+	// Таблица задаёт контент этапа по имени строки. Ошибки настройки оставляют сессию в Preparing.
+	const FCombatStageRow* Stage = StageHandle.GetRow<FCombatStageRow>(TEXT("Initial combat stage"));
+	if (!Stage || !IsValid(Stage->Environment.Get()) || Stage->Environment->GetEnvironmentMap().IsNull() ||
+		Stage->EnemyRoster.IsEmpty() || !IsValid(Stage->EnemyRoster[0].Get()))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Initial combat stage %s requires a row, environment map and first enemy."),
+			*StageHandle.RowName.ToString());
+		return;
+	}
+
+	const TSoftObjectPtr<UWorld>& EnvironmentMap = Stage->Environment->GetEnvironmentMap();
 	// Контекст выбирает мир, мягкая ссылка выбирает карту, а Identity сохраняет авторскую расстановку.
 	bool RequestAccepted {};
 	ULevelStreamingDynamic* Streaming = (
@@ -49,11 +63,14 @@ void UCombatSession::RequestInitialEnvironment(UObject * WorldContextObject, con
 
 	// Запоминаем объект, чтобы принять уведомление о показе и позже запросить выгрузку.
 	EnvironmentStreaming = Streaming;
+	InitialEnemy = Stage->EnemyRoster[0];
 
 	// Unreal вызовет обработчик, когда добавит подуровень в мир и сделает его видимым.
 	Streaming->OnLevelShown.AddDynamic(this, &UCombatSession::HandleEnvironmentShown);
 
 	// Лог подтверждает приём запроса. Проверка видимости и регистрация арены произойдут в обработчике.
+	UE_LOG(LogCombatSession, Display, TEXT("Initial combat stage: %s; Environment: %s; First enemy: %s"),
+		*StageHandle.RowName.ToString(), *Stage->Environment->GetName(), *InitialEnemy->GetName());
 	UE_LOG( LogCombatSession, Display, TEXT("Environment requested: %s"), *EnvironmentMap.ToSoftObjectPath().ToString() );
 }
 
@@ -191,10 +208,9 @@ void UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Arena)
 		*SpawnedEnemy->GetName(), *SpawnedEnemy->GetLevel()->GetOutermost()->GetName(), *InitialEnemy->GetName());
 }
 
-void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass, UCombatEnemyDefinition* InInitialEnemy) {
-	// Сохраняем настройки до появления арены. Outer в логе позволяет связать сессию с её GameMode.
+void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
+	// Сохраняем класс героя до появления арены. Outer в логе позволяет связать сессию с её GameMode.
 	HeroClass = InHeroClass;
-	InitialEnemy = InInitialEnemy;
 	UE_LOG( LogCombatSession, Log, TEXT("Initialize: %s; Outer: %s"), *GetName(), *GetOuter()->GetName() );
 }
 

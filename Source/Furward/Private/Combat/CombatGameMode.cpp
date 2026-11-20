@@ -6,8 +6,6 @@
  */
 
 #include "CombatGameMode.h"
-#include "CombatEnemyDefinition.h"
-#include "CombatEnvironmentDefinition.h"
 #include "CombatSession.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -20,8 +18,8 @@ void ACombatGameMode::InitGame(const FString& MapName, const FString& Options, F
 
 	// Создаём сессию с GameMode в качестве Outer и удерживаем её в отражаемом поле.
 	CombatSession = NewObject <UCombatSession> (this);
-	// Передаём настройки участников до первого запроса подгрузки.
-	CombatSession->Initialize(HeroClass, InitialEnemy.Get());
+	// Класс героя нужен сессии, когда окружение появится в игровом мире.
+	CombatSession->Initialize(HeroClass);
 }
 
 UCombatSession* ACombatGameMode::GetCombatSession()
@@ -34,17 +32,8 @@ void ACombatGameMode::BeginPlay() {
 
 	UE_LOG(LogCombatGameMode, Display, TEXT("BeginPlay: %s"), *GetName());
 
-	// GameMode проверяет обе ссылки из Class Defaults. В логе можно отличить пустое описание от неназначенной карты.
-	if (!InitialEnvironment) {
-		UE_LOG(LogCombatGameMode, Warning, TEXT("Initial Environment is unset: assign it in GameMode Class Defaults"));
-	}
-	else if (InitialEnvironment->GetEnvironmentMap().IsNull()) {
-		UE_LOG(LogCombatGameMode, Warning, TEXT("%s: Environment Map is unset: assign a level asset"), *InitialEnvironment->GetName());
-	}
-	else {
-		// Передаём GameMode как контекст мира. Сессия продолжит подготовку по событию появления подуровня.
-		CombatSession->RequestInitialEnvironment(this, InitialEnvironment->GetEnvironmentMap());
-	}
+	// Сессия получает строку этапа и использует GameMode как контекст для загрузки окружения.
+	CombatSession->RequestInitialStage(this, InitialStage);
 }
 
 void ACombatGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason) {

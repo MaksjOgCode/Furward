@@ -8,6 +8,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/DataTable.h"
 #include "GameFramework/GameModeBase.h"
 #include "UObject/ObjectPtr.h"
 #include "Templates/SubclassOf.h"
@@ -16,9 +17,7 @@
 
 
 class UCombatSession;
-class UCombatEnvironmentDefinition;
 class ACombatHero;
-class UCombatEnemyDefinition;
 
 
 
@@ -26,7 +25,7 @@ class UCombatEnemyDefinition;
  * @brief Владеет одной UCombatSession на время посещения карты L_Combat.
  *
  * Unreal создаёт экземпляр BP_Combat_GameMode для игрового мира.
- * В Class Defaults задают окружение, героя и описание первого противника.
+ * В Class Defaults задают класс героя и строку начального этапа.
  */
 UCLASS()
 class ACombatGameMode : public AGameModeBase
@@ -34,7 +33,7 @@ class ACombatGameMode : public AGameModeBase
 	GENERATED_BODY()
 public:
 	/**
-	 * @brief Создаёт сессию и передаёт ей настройки участников до начала игры.
+	 * @brief Создаёт сессию и передаёт ей класс героя до начала игры.
 	 *
 	 * Unreal вызывает метод при инициализации карты. Сессия пишет Initialize в лог.
 	 * @param[in] MapName Имя текущей карты.
@@ -52,11 +51,11 @@ public:
 
 protected:
 	/**
-	 * @brief Запрашивает подгрузку стартового окружения, когда Unreal запускает карту.
+	 * @brief Передаёт сессии начальный этап, когда Unreal запускает карту.
 	 *
-	 * Если описание или карта не назначены, пишет предупреждение. При принятии запроса сессия пишет Environment requested.
+	 * Сессия читает строку таблицы. Лог Initial combat stage указывает выбранную строку и контент.
 	 * @pre InitGame() создал CombatSession.
-	 * @see UCombatSession::RequestInitialEnvironment
+	 * @see UCombatSession::RequestInitialStage
 	 */
 	virtual void BeginPlay() override;
 
@@ -69,13 +68,13 @@ protected:
 
 private:
 	/**
-	 * @brief Описание стартового окружения из Class Defaults BP_Combat_GameMode.
+	 * @brief Ссылка на таблицу и имя начальной строки из Class Defaults BP_Combat_GameMode.
 	 *
-	 * GameMode удерживает его как настройку на время жизни экземпляра.
-	 * Пустое поле оставляет сцену без запроса загрузки и даёт предупреждение в BeginPlay().
+	 * GameMode удерживает выбранную таблицу во время посещения L_Combat.
+	 * Если строка не назначена, сессия остаётся в Preparing и пишет предупреждение.
 	 */
-	UPROPERTY(EditDefaultsOnly, Category = "Combat|Environment")
-	TObjectPtr <UCombatEnvironmentDefinition> InitialEnvironment = nullptr;
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Stage", meta = (RowType = "/Script/Furward.CombatStageRow"))
+	FDataTableRowHandle InitialStage;
 
 	/**
 	 * @brief Удерживающая ссылка на сессию от InitGame() до EndPlay().
@@ -93,13 +92,4 @@ private:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Participants")
 	TSubclassOf <ACombatHero> HeroClass;
-
-	/**
-	 * @brief Стартовое описание вида, назначенное в Class Defaults.
-	 *
-	 * GameMode удерживает ассет и передаёт его сессии в InitGame().
-	 * Если поле пусто, сессия пишет ошибку и пропускает спаун противника.
-	 */
-	UPROPERTY(EditDefaultsOnly, Category = "Combat|Participants")
-	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
 };
