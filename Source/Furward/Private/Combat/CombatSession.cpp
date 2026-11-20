@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Готовит столкновения, обрабатывает атаки, зачистку и завершение этапа после победы над боссом.
+ * @brief Готовит столкновения, фиксирует исход и продолжает этапы после подтверждения сохранения.
  */
 
 #include "Combat/CombatSession.h"
@@ -20,7 +20,9 @@
 #include "Engine/LevelStreamingDynamic.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
 #include "Profile/FurwardProfileSubsystem.h"
+#include "Save/FurwardSaveSubsystem.h"
 #include "TimerManager.h"
 
 
@@ -40,6 +42,169 @@ void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
 {
 	bPIECombatPreview = true;
 	PIECombatRules = InRules;
+}
+
+bool UCombatSession::RequestNextStage(FName SaveSlot)
+{
+	const UWorld* World = GetOuter()->GetWorld();
+	UFurwardProfileSubsystem* Profile = GetProfile();
+	if (!bPIECombatPreview || !World || World->IsPaused() || Phase != ECombatPhase::StageCompleted ||
+		!PendingNextStageID.IsNone() || !Profile || !Profile->IsExpeditionStageCompleted(ActiveStageID) ||
+		SaveSlot.IsNone() || (!PIEProgressSlot.IsNone() && PIEProgressSlot != SaveSlot))
+	{
+		return false;
+	}
+
+	FName NextStageID;
+	if (!FindNextStageOnActiveArena(NextStageID))
+	{
+		return false;
+	}
+
+	UFurwardSaveSubsystem* Save = UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(World->GetGameInstance());
+	if (!Save || (PIEProgressSlot.IsNone() &&
+		UGameplayStatics::DoesSaveGameExist(SaveSlot.ToString(), UFurwardSaveSubsystem::LocalUserIndex)))
+	{
+		return false;
+	}
+
+	FFurwardProfileSnapshot Snapshot = Profile->CreateSnapshot();
+	const int64 Revision = Snapshot.Revision;
+	PendingNextStageID = NextStageID;
+	StageSaveSubsystem = Save;
+	StageSaveListener = Save->OnSaveFinished().AddUObject(this, &UCombatSession::HandleStageSaveFinished);
+	const FName PreviousSlot = PIEProgressSlot;
+	PIEProgressSlot = SaveSlot;
+
+	if (Save->GetSaveStatus(SaveSlot).IsLatestRevisionSaved(Revision))
+	{
+		HandleStageSaveFinished(SaveSlot, Revision, true);
+		return true;
+	}
+
+	UE_LOG(LogCombatSession, Display, TEXT("Stage transition awaiting save: %s -> %s; Revision: %lld"),
+		*ActiveStageID.ToString(), *NextStageID.ToString(), Revision);
+	if (!Save->RequestSave(SaveSlot, MoveTemp(Snapshot)))
+	{
+		ResetPendingStageTransition();
+		PIEProgressSlot = PreviousSlot;
+		return false;
+	}
+	return true;
+}
+
+const FCombatStageRow* UCombatSession::FindNextStageOnActiveArena(FName& NextStageID) const
+{
+	if (!ActiveStageTable || !ActiveArena.IsValid() || !IsValid(EnvironmentStreaming.Get()) ||
+		!EnvironmentStreaming->IsLevelVisible())
+	{
+		return nullptr;
+	}
+
+	const FCombatStageRow* Current = ActiveStageTable->FindRow<FCombatStageRow>(ActiveStageID, TEXT("Next combat stage"));
+	if (!Current || Current->NextStage.IsNone() || Current->NextStage == ActiveStageID)
+	{
+		return nullptr;
+	}
+
+	const FCombatStageRow* Next = ActiveStageTable->FindRow<FCombatStageRow>(Current->NextStage, TEXT("Next combat stage"));
+	if (!Next || !IsValid(Current->Environment.Get()) || !IsValid(Next->Environment.Get()) ||
+		Current->Environment->GetEnvironmentMap() != Next->Environment->GetEnvironmentMap() ||
+		Next->EnemyRoster.IsEmpty() || !IsValid(Next->EnemyRoster[0].Get()))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("PIE next stage requires a configured enemy and the active environment."));
+		return nullptr;
+	}
+
+	NextStageID = Current->NextStage;
+	return Next;
+}
+
+void UCombatSession::HandleStageSaveFinished(FName Slot, int64 WrittenRevision, bool bSuccess)
+{
+	if (Phase != ECombatPhase::StageCompleted || PendingNextStageID.IsNone() || Slot != PIEProgressSlot)
+	{
+		return;
+	}
+
+	UFurwardSaveSubsystem* Save = StageSaveSubsystem.Get();
+	UFurwardProfileSubsystem* Profile = GetProfile();
+	if (!Save || !Profile)
+	{
+		ResetPendingStageTransition();
+		return;
+	}
+
+	const FFurwardSaveStatus Status = Save->GetSaveStatus(Slot);
+	if (!bSuccess && Status.bLatestWriteFailed && WrittenRevision == Status.LatestRequestedRevision)
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Stage transition save failed; request the next stage again to retry."));
+		ResetPendingStageTransition();
+		return;
+	}
+
+	FFurwardProfileSnapshot Snapshot = Profile->CreateSnapshot();
+	if (Status.IsLatestRevisionSaved(Snapshot.Revision))
+	{
+		const FName NextStageID = PendingNextStageID;
+		ResetPendingStageTransition();
+		UE_LOG(LogCombatSession, Display, TEXT("Stage transition save confirmed: %s; Revision: %lld"),
+			*NextStageID.ToString(), Status.LastSavedRevision);
+		BeginNextStageOnActiveArena(NextStageID);
+	}
+	else if (Snapshot.Revision > Status.LatestRequestedRevision)
+	{
+		// Новая ревизия могла появиться, пока платформа записывала предыдущий снимок.
+		if (!Save->RequestSave(Slot, MoveTemp(Snapshot)))
+		{
+			ResetPendingStageTransition();
+		}
+	}
+}
+
+void UCombatSession::ResetPendingStageTransition()
+{
+	if (UFurwardSaveSubsystem* Save = StageSaveSubsystem.Get())
+	{
+		Save->OnSaveFinished().Remove(StageSaveListener);
+	}
+	StageSaveListener.Reset();
+	StageSaveSubsystem.Reset();
+	PendingNextStageID = NAME_None;
+}
+
+void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
+{
+	FName NextStageID;
+	const FCombatStageRow* Next = FindNextStageOnActiveArena(NextStageID);
+	ACombatArena* Arena = ActiveArena.Get();
+	UWorld* World = Arena ? Arena->GetWorld() : nullptr;
+	if (!Next || NextStageID != StageID || !World || World->IsPaused())
+	{
+		return;
+	}
+
+	if (ACombatEnemy* PreviousEnemy = Enemy.Get())
+	{
+		UCombatAttributesComponent& Attributes = PreviousEnemy->GetAttributes();
+		if (!PreviousEnemy->Destroy())
+		{
+			return;
+		}
+		Attributes.OnDeath().RemoveAll(this);
+	}
+	Enemy.Reset();
+	EncounterID.Invalidate();
+	EnemyDefinitionID = FPrimaryAssetId();
+	EncounterResult.Reset();
+	bCurrentEnemyIsBoss = false;
+
+	Phase = ECombatPhase::Preparing;
+	ActiveStageID = NextStageID;
+	InitialEnemy = Next->EnemyRoster[0];
+	BossEnemy = Next->Boss;
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; Stage: %s"), *ActiveStageID.ToString());
+	PrepareStageParticipants(*World, *Arena);
 }
 
 void UCombatSession::TryContinuePIECombatPreview()
@@ -213,6 +378,7 @@ void UCombatSession::RequestInitialStage(UObject* WorldContextObject, const FDat
 	InitialEnemy = Stage->EnemyRoster[0];
 	BossEnemy = Stage->Boss;
 	ActiveStageID = StageHandle.RowName;
+	ActiveStageTable = StageHandle.DataTable;
 
 	// Unreal вызовет обработчик, когда добавит подуровень в мир и сделает его видимым.
 	Streaming->OnLevelShown.AddDynamic(this, &UCombatSession::HandleEnvironmentShown);
@@ -269,7 +435,11 @@ void UCombatSession::HandleEnvironmentShown()
     }
 
     Controller->UseArenaCamera(FoundArena);
+    PrepareStageParticipants(*World, *FoundArena);
+}
 
+void UCombatSession::PrepareStageParticipants(UWorld& World, const ACombatArena& Arena)
+{
     const UCombatEnemyDefinition* StartingDefinition = InitialEnemy.Get();
 #if WITH_EDITOR
     const UFurwardProfileSubsystem* Profile = bPIECombatPreview ? GetProfile() : nullptr;
@@ -292,10 +462,10 @@ void UCombatSession::HandleEnvironmentShown()
 #endif
 
     // Создаём участников по точкам арены на постоянном уровне, когда выбран следующий бой.
-    SpawnHero(*World, *FoundArena);
+    SpawnHero(World, Arena);
     if (IsValid(StartingDefinition))
     {
-        if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *StartingDefinition))
+        if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(World, Arena, *StartingDefinition))
         {
             RegisterEnemy(*SpawnedEnemy, *StartingDefinition);
         }
@@ -309,7 +479,21 @@ void UCombatSession::HandleEnvironmentShown()
             // Согласованные числа проверки применяются к экземплярам после появления арены.
             const FCombatBaseAttributes HeroBase{120.0f, 22.0f, 7.0f};
             const FCombatBaseAttributes OrdinaryBase{85.0f, 12.0f, 4.0f};
-            if (InitializeParticipantAttributes(HeroBase, 70.0f, bCurrentEnemyIsBoss ? PIEBossBase : OrdinaryBase))
+            const FCombatBaseAttributes& EnemyBase = bCurrentEnemyIsBoss ? PIEBossBase : OrdinaryBase;
+            if (Hero->GetAttributes().IsHealthInitialized())
+            {
+                // На той же арене герой остаётся тем же актором. Инициализируем нового противника отдельно.
+                UCombatAttributesComponent& EnemyAttributes = Enemy->GetAttributes();
+                if (!Hero->GetAttributes().IsDead() &&
+                    EnemyAttributes.CanInitializeAttributes(EnemyBase, EnemyBase.MaxHealth))
+                {
+                    EnemyAttributes.SetInitialAttributes(EnemyBase, EnemyBase.MaxHealth);
+                    EnterStageReady();
+                    EnemyAttributes.PublishInitialHealth();
+                    return;
+                }
+            }
+            else if (InitializeParticipantAttributes(HeroBase, 70.0f, EnemyBase))
             {
                 UE_LOG(LogCombatSession, Display, TEXT("PIE combat preview enabled."));
                 return;
@@ -448,13 +632,20 @@ bool UCombatSession::InitializeParticipantAttributes(const FCombatBaseAttributes
 	// Заполняем оба компонента и только затем сообщаем подписчикам о начальном здоровье.
 	HeroAttributes.SetInitialAttributes(HeroBase, HeroCurrentHealth);
 	EnemyAttributes.SetInitialAttributes(EnemyBase, EnemyBase.MaxHealth);
+	EnterStageReady();
+	HeroAttributes.PublishInitialHealth();
+	EnemyAttributes.PublishInitialHealth();
+	return true;
+}
+
+void UCombatSession::EnterStageReady()
+{
+	const UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
+	const UCombatAttributesComponent& EnemyAttributes = Enemy->GetAttributes();
 	Phase = ECombatPhase::Ready;
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Ready; Hero HP %.2f/%.2f; Enemy HP %.2f/%.2f"),
 		HeroAttributes.GetCurrentHealth(), HeroAttributes.GetMaxHealth(),
 		EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth());
-	HeroAttributes.PublishInitialHealth();
-	EnemyAttributes.PublishInitialHealth();
-	return true;
 }
 
 bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, const FCombatBaseAttributes& EnemyBase)
@@ -716,6 +907,8 @@ void UCombatSession::Shutdown() {
 	// Сначала блокируем новые команды. Постоянный уровень продолжает владеть участниками до завершения мира.
 	Phase = ECombatPhase::Leaving;
 #if WITH_EDITOR
+	ResetPendingStageTransition();
+	PIEProgressSlot = NAME_None;
 	StopPIEEnemyAttacks();
 #endif
 	if (ACombatHero* CurrentHero = Hero.Get())
@@ -737,6 +930,7 @@ void UCombatSession::Shutdown() {
 	InitialEnemy = nullptr;
 	BossEnemy = nullptr;
 	ActiveStageID = NAME_None;
+	ActiveStageTable = nullptr;
 	ActiveArena.Reset();
 
 #if WITH_EDITORONLY_DATA

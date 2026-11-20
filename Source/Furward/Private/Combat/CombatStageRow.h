@@ -44,6 +44,10 @@ struct FCombatStageRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, Category = "Combat|Stage")
 	TObjectPtr<UCombatEnemyDefinition> Boss;
 
+	/** @brief Имя следующей строки той же таблицы. Пустое значение завершает доступную цепочку. */
+	UPROPERTY(EditAnywhere, Category = "Combat|Stage")
+	FName NextStage;
+
 	/**
 	 * @brief Ожидаемый набор героя для расчёта баланса противников этого этапа.
 	 *

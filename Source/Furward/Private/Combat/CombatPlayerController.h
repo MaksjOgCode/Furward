@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает ввод, боевую камеру и передачу запроса кликовой атаки в сессию.
+ * @brief Описывает боевой ввод, камеру и команды, которые контроллер передаёт сессии.
  */
 
 #pragma once
@@ -41,6 +41,15 @@ public:
 	 * @see UCombatSession::HandleEnvironmentShown
 	 */
 	void UseArenaCamera(ACombatArena* Arena);
+
+	/**
+	 * @brief Передаёт сессии команду подготовки следующего этапа после записи прогресса.
+	 * @param[in] SaveSlot Новый выделенный слот текущей проверки PIE.
+	 * @return true, если сессия приняла команду продолжения.
+	 */
+	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Stage")
+	bool RequestNextStage(FName SaveSlot);
+
 protected:
 	/**
 	 * @brief Показывает курсор и включает GameAndUI при начале игры.

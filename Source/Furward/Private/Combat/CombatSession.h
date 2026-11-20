@@ -26,8 +26,11 @@ class UCombatAttributesComponent;
 class UCombatEnemyDefinition;
 class UCombatRulesDefinition;
 class UFurwardProfileSubsystem;
+class UFurwardSaveSubsystem;
+class UDataTable;
 struct FCombatBaseAttributes;
 struct FDataTableRowHandle;
+struct FCombatStageRow;
 
 /** @brief Результат проверки луча от курсора, который контроллер вычисляет перед отправкой команды. */
 enum class ECombatClickResult : uint8
@@ -65,7 +68,7 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия фиксирует исход, управляет таймером атак и передаёт победы пробной экспедиции профилю.
+ * Сессия фиксирует исход, управляет таймером атак и в пробной экспедиции ждёт сохранения перед сменой этапа.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -87,6 +90,14 @@ public:
 	 * @pre GameMode проверил тип мира и явное включение проверки до запроса этапа.
 	 */
 	void EnablePIECombatPreview(UCombatRulesDefinition* InRules);
+
+	/**
+	 * @brief Принимает команду на следующий этап пробной экспедиции и запрашивает запись прогресса.
+	 * @param[in] SaveSlot Имя выделенного слота текущей проверки PIE.
+	 * @return true, если запрос принят после завершения активного этапа.
+	 * @post До подтверждения актуальной ревизии сессия остаётся в StageCompleted.
+	 */
+	bool RequestNextStage(FName SaveSlot);
 #endif
 
 	/**
@@ -212,6 +223,42 @@ private:
 	void TryContinuePIECombatPreview();
 
 	/**
+	 * @brief Читает следующую строку активного этапа для продолжения на загруженной арене.
+	 * @param[out] NextStageID Имя следующей строки при успехе.
+	 * @return Подготовленная строка с тем же окружением либо nullptr.
+	 */
+	const FCombatStageRow* FindNextStageOnActiveArena(FName& NextStageID) const;
+
+	/**
+	 * @brief Принимает результат записи и начинает подготовку после подтверждения актуальной ревизии.
+	 * @param[in] Slot Имя слота, для которого завершилась запись.
+	 * @param[in] WrittenRevision Ревизия этой попытки записи.
+	 * @param[in] bSuccess Подтверждение записи от платформы.
+	 */
+	void HandleStageSaveFinished(FName Slot, int64 WrittenRevision, bool bSuccess);
+
+	/**
+	 * @brief Готовит следующую строку на существующей арене после подтверждения записи.
+	 * @param[in] StageID Имя выбранной строки.
+	 */
+	void BeginNextStageOnActiveArena(FName StageID);
+
+	/** @brief Снимает подписку и освобождает запрос перехода, включая ожидание при Shutdown(). */
+	void ResetPendingStageTransition();
+
+	/** @brief Подсистема записи, на которую подписана сессия во время ожидания. */
+	TWeakObjectPtr<UFurwardSaveSubsystem> StageSaveSubsystem;
+
+	/** @brief Дескриптор подписки на результат записи выбранного слота. */
+	FDelegateHandle StageSaveListener;
+
+	/** @brief Выделенный слот проверки, уже принятый этой сессией. */
+	FName PIEProgressSlot;
+
+	/** @brief Строка, которую сессия подготавливает после подтверждения актуального сохранения. */
+	FName PendingNextStageID;
+
+	/**
 	 * @brief Выбирает описание следующего участника пробной экспедиции по зачистке.
 	 * @param[in] bBossPending true, если профиль уже достиг порога зачистки.
 	 * @return Обычный противник либо отдельное описание босса. Отсутствующее описание босса даёт nullptr.
@@ -284,6 +331,17 @@ private:
 	 */
 	UFUNCTION()
 	void HandleEnvironmentShown();
+
+	/**
+	 * @brief Создаёт участников активного этапа на видимой арене и применяет пробные характеристики в PIE.
+	 * @param[in,out] World Мир, в постоянном уровне которого создаются участники.
+	 * @param[in] Arena Арена, зарегистрированная в показанном окружении.
+	 * @pre Сессия в Preparing, выбран активный этап.
+	 */
+	void PrepareStageParticipants(UWorld& World, const ACombatArena& Arena);
+
+	/** @brief Открывает ввод после заполнения характеристик обоих участников. */
+	void EnterStageReady();
 
 	/**
 	 * @brief Объект управления подуровнем от принятия запроса до Shutdown().
@@ -372,6 +430,10 @@ private:
 
 	/** @brief Имя строки этапа из DT_Combat_Stages, под которым профиль хранит зачистку. */
 	FName ActiveStageID;
+
+	/** @brief Таблица активной строки, из которой сессия выбирает продолжение этапа. */
+	UPROPERTY(Transient)
+	TObjectPtr<const UDataTable> ActiveStageTable;
 
 	/**
 	 * @brief Слабая ссылка на экземпляр противника в постоянном уровне.

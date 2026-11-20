@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подключает Enhanced Input, переключает камеру арены и проводит клик от курсора до сессии.
+ * @brief Подключает ввод и камеру и передаёт сессии клики и команду продолжения этапа.
  */
 
 #include "Combat/CombatPlayerController.h"
@@ -38,6 +38,18 @@ void ACombatPlayerController::UseArenaCamera(ACombatArena* Arena) {
 
     // Записываем текущую цель камеры, чтобы сверить её с зарегистрированной ареной.
     UE_LOG( LogCombatPlayerController, Display, TEXT("Combat view target: %s"), *GetNameSafe(GetViewTarget()) );
+}
+
+bool ACombatPlayerController::RequestNextStage(FName SaveSlot)
+{
+#if WITH_EDITOR
+	const UWorld* World = GetWorld();
+	ACombatGameMode* GameMode = World ? World->GetAuthGameMode<ACombatGameMode>() : nullptr;
+	UCombatSession* Session = GameMode ? GameMode->GetCombatSession() : nullptr;
+	return Session && Session->RequestNextStage(SaveSlot);
+#else
+	return false;
+#endif
 }
 
 void ACombatPlayerController::BeginPlay() {
