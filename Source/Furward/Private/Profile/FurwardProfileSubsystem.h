@@ -2,12 +2,13 @@
 
 /**
  * @file
- * @brief Описывает зачистку и завершение этапов экспедиции в профиле.
+ * @brief Описывает зачистку, завершение этапов и создание снимка прогресса профиля.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Profile/FurwardProfileSnapshot.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "FurwardProfileSubsystem.generated.h"
 
@@ -65,6 +66,20 @@ public:
 	 */
 	bool IsExpeditionStageCompleted(FName StageID) const;
 
+	/**
+	 * @brief Копирует текущий прогресс и его ревизию для запроса сохранения.
+	 * @return Снимок, который сохраняет значения на момент вызова.
+	 */
+	FFurwardProfileSnapshot CreateSnapshot() const;
+
+	/**
+	 * @brief Проверяет и восстанавливает прогресс из загруженного снимка.
+	 * @param[in] Snapshot Данные поддерживаемой версии сохранения.
+	 * @return true, если счётчики, завершённые этапы, идентификаторы и ревизия согласованы.
+	 * @post При успехе профиль принимает весь снимок. При ошибке профиль сохраняет текущее состояние.
+	 */
+	bool TryRestoreSnapshot(const FFurwardProfileSnapshot& Snapshot);
+
 private:
 	/**
 	 * @brief Проверяет идентификаторы этапа и победы перед изменением профиля.
@@ -74,12 +89,6 @@ private:
 	 */
 	bool CanRecordEncounter(FName StageID, const FGuid& EncounterID) const;
 
-	/** @brief Число учтённых побед по имени строки каждого боевого этапа. */
-	TMap<FName, int32> ExpeditionClearsByStage;
-
-	/** @brief Имена строк этапов, боссы которых побеждены. */
-	TSet<FName> CompletedExpeditionStages;
-
-	/** @brief Идентификаторы побед, уже зачтённых этим экземпляром профиля. */
-	TSet<FGuid> RecordedEncounterIDs;
+	/** @brief Текущее состояние профиля. Каждая засчитанная победа увеличивает ревизию на единицу. */
+	FFurwardProfileSnapshot Progress;
 };
