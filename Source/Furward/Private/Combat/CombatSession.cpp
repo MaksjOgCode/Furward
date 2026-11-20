@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Готовит столкновения, обрабатывает атаки и передаёт зачистку пробного этапа профилю.
+ * @brief Готовит обычные и боссовые столкновения, обрабатывает атаки и передаёт зачистку профилю.
  */
 
 #include "Combat/CombatSession.h"
@@ -30,6 +30,12 @@ DEFINE_LOG_CATEGORY_STATIC( LogCombatSession, Log, All );
 
 
 #if WITH_EDITOR
+namespace
+{
+// Этот набор используется только для пробного боя до подключения игрового расчёта характеристик босса.
+constexpr FCombatBaseAttributes PIEBossBase{170.0f, 16.0f, 6.0f};
+}
+
 void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
 {
 	bPIECombatPreview = true;
@@ -43,6 +49,12 @@ void UCombatSession::TryContinuePIECombatPreview()
 		return;
 	}
 
+	if (EncounterResult.GetValue().bDefeatedBoss)
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("PIE boss defeat recorded: %s"), *ActiveStageID.ToString());
+		return;
+	}
+
 	// Зачитываем победу в профиле до решения о создании следующего противника.
 	UFurwardProfileSubsystem* Profile = GetPIEProfile();
 	if (!Profile || !Profile->TryRecordExpeditionClear(ActiveStageID, EncounterResult.GetValue().EncounterID))
@@ -53,15 +65,12 @@ void UCombatSession::TryContinuePIECombatPreview()
 	const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
 	UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
 		*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
-	if (Profile->IsExpeditionClearComplete(ActiveStageID))
-	{
-		UE_LOG(LogCombatSession, Display, TEXT("PIE expedition boss pending: %s"), *ActiveStageID.ToString());
-		return;
-	}
+	const bool bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
+	const UCombatEnemyDefinition* NextDefinition = SelectPIEEnemyDefinition(bBossPending);
 
 	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
 	const ACombatEnemy* DefeatedEnemy = Enemy.Get();
-	if (!IsValid(Rules) || !DefeatedEnemy || !IsValid(InitialEnemy.Get()))
+	if (!IsValid(Rules) || !DefeatedEnemy || !NextDefinition)
 	{
 		return;
 	}
@@ -78,11 +87,17 @@ void UCombatSession::TryContinuePIECombatPreview()
 		return;
 	}
 
-	// В пробном бою повторно используем описание и характеристики исходного мутанта.
-	const FCombatBaseAttributes EnemyBase = DefeatedEnemy->GetAttributes().GetBaseAttributes();
-	if (!PrepareNextEnemy(*InitialEnemy, EnemyBase) || !ActivatePreparedEncounter(EncounterID, *Rules))
+	// Обычные мутанты повторяют прежний набор. Босс получает отдельные значения пробного боя.
+	const FCombatBaseAttributes EnemyBase = bBossPending ? PIEBossBase : DefeatedEnemy->GetAttributes().GetBaseAttributes();
+	if (!PrepareNextEnemy(*NextDefinition, EnemyBase) || !ActivatePreparedEncounter(EncounterID, *Rules))
 	{
 		UE_LOG(LogCombatSession, Warning, TEXT("PIE combat preview could not activate the next encounter."));
+		return;
+	}
+
+	if (bBossPending)
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("PIE expedition boss activated: %s"), *ActiveStageID.ToString());
 	}
 }
 
@@ -92,6 +107,24 @@ UFurwardProfileSubsystem* UCombatSession::GetPIEProfile() const
 	return bPIECombatPreview && World
 		? UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(World->GetGameInstance())
 		: nullptr;
+}
+
+const UCombatEnemyDefinition* UCombatSession::SelectPIEEnemyDefinition(bool bBossPending) const
+{
+	if (!bBossPending)
+	{
+		return InitialEnemy.Get();
+	}
+
+	const UCombatEnemyDefinition* Definition = BossEnemy.Get();
+	if (!IsValid(Definition) || Definition == InitialEnemy.Get())
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Combat stage %s requires a distinct boss definition."),
+			*ActiveStageID.ToString());
+		return nullptr;
+	}
+
+	return Definition;
 }
 
 void UCombatSession::StartPIEEnemyAttacks()
@@ -192,6 +225,7 @@ void UCombatSession::RequestInitialStage(UObject* WorldContextObject, const FDat
 	// Запоминаем объект, чтобы принять уведомление о показе и позже запросить выгрузку.
 	EnvironmentStreaming = Streaming;
 	InitialEnemy = Stage->EnemyRoster[0];
+	BossEnemy = Stage->Boss;
 	ActiveStageID = StageHandle.RowName;
 
 	// Unreal вызовет обработчик, когда добавит подуровень в мир и сделает его видимым.
@@ -252,22 +286,26 @@ void UCombatSession::HandleEnvironmentShown()
     Controller->UseArenaCamera(FoundArena);
     SpawnHero(*World, *FoundArena);
 
+    const UCombatEnemyDefinition* StartingDefinition = InitialEnemy.Get();
 #if WITH_EDITOR
     if (const UFurwardProfileSubsystem* Profile = GetPIEProfile();
         Profile && Profile->IsExpeditionClearComplete(ActiveStageID))
     {
-        UE_LOG(LogCombatSession, Display, TEXT("PIE expedition resumes at %d/%d; boss pending: %s"),
-            Profile->GetExpeditionClearCount(ActiveStageID), UFurwardProfileSubsystem::RequiredExpeditionClears,
+        StartingDefinition = SelectPIEEnemyDefinition(true);
+        if (!StartingDefinition)
+        {
+            return;
+        }
+        UE_LOG(LogCombatSession, Display, TEXT("PIE expedition resumes with boss at 10/10: %s"),
             *ActiveStageID.ToString());
-        return;
     }
 #endif
 
-    if (IsValid(InitialEnemy.Get()))
+    if (IsValid(StartingDefinition))
     {
-        if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *InitialEnemy))
+        if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *StartingDefinition))
         {
-            RegisterEnemy(*SpawnedEnemy, *InitialEnemy);
+            RegisterEnemy(*SpawnedEnemy, *StartingDefinition);
         }
     }
 
@@ -278,8 +316,8 @@ void UCombatSession::HandleEnvironmentShown()
         {
             // Согласованные числа проверки применяются к экземплярам после появления арены.
             const FCombatBaseAttributes HeroBase{120.0f, 22.0f, 7.0f};
-            const FCombatBaseAttributes EnemyBase{85.0f, 12.0f, 4.0f};
-            if (InitializeParticipantAttributes(HeroBase, 70.0f, EnemyBase))
+            const FCombatBaseAttributes OrdinaryBase{85.0f, 12.0f, 4.0f};
+            if (InitializeParticipantAttributes(HeroBase, 70.0f, bCurrentEnemyIsBoss ? PIEBossBase : OrdinaryBase))
             {
                 UE_LOG(LogCombatSession, Display, TEXT("PIE combat preview enabled."));
                 return;
@@ -373,6 +411,7 @@ void UCombatSession::RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnem
 	Enemy = &SpawnedEnemy;
 	EncounterID = FGuid::NewGuid();
 	EnemyDefinitionID = Definition.GetPrimaryAssetId();
+	bCurrentEnemyIsBoss = BossEnemy.Get() == &Definition && InitialEnemy.Get() != &Definition;
 	EncounterResult.Reset();
 	SpawnedEnemy.GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
 }
@@ -431,7 +470,7 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 	ACombatEnemy* PreviousEnemy = Enemy.Get();
 	ACombatArena* Arena = ActiveArena.Get();
 	const ACombatHero* CurrentHero = Hero.Get();
-	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet() ||
+	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet() || EncounterResult.GetValue().bDefeatedBoss ||
 		!PreviousEnemy || !PreviousEnemy->GetAttributes().IsDead() ||
 		!Arena || !CurrentHero || CurrentHero->GetAttributes().IsDead() ||
 		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
@@ -579,7 +618,7 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	CurrentEnemy->DisableClickAreas();
 
 	// Фиксируем исход по идентификатору столкновения и типу контента. Актор может быть удалён при замене.
-	EncounterResult = FCombatEncounterResult{EncounterID, EnemyDefinitionID};
+	EncounterResult = FCombatEncounterResult{EncounterID, EnemyDefinitionID, bCurrentEnemyIsBoss};
 	UE_LOG(LogCombatSession, Display, TEXT("Combat enemy defeated: %s"), *CurrentEnemy->GetName());
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: ChangingEnemy"));
 	UE_LOG(LogCombatSession, Display, TEXT("Combat encounter result recorded: %s; Enemy definition: %s"),
@@ -674,9 +713,11 @@ void UCombatSession::Shutdown() {
 	Enemy.Reset();
 	EncounterID.Invalidate();
 	EnemyDefinitionID = FPrimaryAssetId();
+	bCurrentEnemyIsBoss = false;
 	EncounterResult.Reset();
 	DefeatSnapshot.Reset();
 	InitialEnemy = nullptr;
+	BossEnemy = nullptr;
 	ActiveStageID = NAME_None;
 	ActiveArena.Reset();
 

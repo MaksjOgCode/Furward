@@ -125,7 +125,7 @@ public:
 		const FCombatBaseAttributes& EnemyBase);
 
 	/**
-	 * @brief Заменяет погибшего обычного противника в точке спауна текущей арены.
+	 * @brief Заменяет погибшего обычного противника на следующий вид, включая босса этапа.
 	 * @param[in] Definition Выбранное описание следующего противника.
 	 * @param[in] EnemyBase Рассчитанные характеристики следующего противника.
 	 * @pre Сессия находится в ChangingEnemy и сформировала результат. Вызывающий код обработал его. Арена видима, герой жив.
@@ -204,7 +204,7 @@ private:
 	/**
 	 * @brief Передаёт победу пробной экспедиции профилю и продолжает зачистку, пока не достигнут порог.
 	 * @pre Пробный бой включён, публикация результата урона завершена.
-	 * @post Победа учитывается по EncounterID. При 10/10 сессия ждёт босса в ChangingEnemy.
+	 * @post Победа учитывается по EncounterID. При 10/10 сессия подготавливает босса вместо обычного противника.
 	 */
 	void TryContinuePIECombatPreview();
 
@@ -213,6 +213,13 @@ private:
 	 * @return Подсистема профиля либо nullptr, пока пробный режим или игровой мир недоступны.
 	 */
 	UFurwardProfileSubsystem* GetPIEProfile() const;
+
+	/**
+	 * @brief Выбирает описание следующего участника пробной экспедиции по зачистке.
+	 * @param[in] bBossPending true, если профиль уже достиг порога зачистки.
+	 * @return Обычный противник либо отдельное описание босса. Отсутствующее описание босса даёт nullptr.
+	 */
+	const UCombatEnemyDefinition* SelectPIEEnemyDefinition(bool bBossPending) const;
 
 	/**
 	 * @brief Запускает повторяемые удары текущего противника, если пробный бой и интервалы настроены.
@@ -350,6 +357,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCombatEnemyDefinition> InitialEnemy;
 
+	/** @brief Описание босса из строки активного этапа. Сессия удерживает его до Shutdown(). */
+	UPROPERTY(Transient)
+	TObjectPtr<UCombatEnemyDefinition> BossEnemy;
+
 	/** @brief Имя строки этапа из DT_Combat_Stages, под которым профиль хранит зачистку. */
 	FName ActiveStageID;
 
@@ -367,6 +378,9 @@ private:
 
 	/** @brief Идентификатор Data Asset текущего противника для результата столкновения. */
 	FPrimaryAssetId EnemyDefinitionID;
+
+	/** @brief Показывает, относится ли текущий экземпляр врага к описанию босса этапа. */
+	bool bCurrentEnemyIsBoss = false;
 
 	/** @brief Результат после смерти противника. Сохраняется до регистрации следующего или завершения сессии. */
 	TOptional<FCombatEncounterResult> EncounterResult;

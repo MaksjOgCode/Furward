@@ -15,7 +15,7 @@ class UCombatEnemyDefinition;
 class UCombatEnvironmentDefinition;
 
 /**
- * @brief Связывает окружение, состав противников и ожидаемые характеристики этапа.
+ * @brief Связывает окружение, состав обычных противников, босса и ожидаемые характеристики этапа.
  *
  * Data Table хранит строки по именам. Сессия читает выбранную строку при входе в L_Combat.
  */
@@ -35,6 +35,14 @@ struct FCombatStageRow : public FTableRowBase
 	 */
 	UPROPERTY(EditAnywhere, Category = "Combat|Stage")
 	TArray<TObjectPtr<UCombatEnemyDefinition>> EnemyRoster;
+
+	/**
+	 * @brief Отдельный Data Asset босса, доступного после зачистки обычных противников этапа.
+	 *
+	 * Сессия использует это описание при достижении 10/10 и при повторном входе с полной зачисткой.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Combat|Stage")
+	TObjectPtr<UCombatEnemyDefinition> Boss;
 
 	/**
 	 * @brief Ожидаемый набор героя для расчёта баланса противников этого этапа.
