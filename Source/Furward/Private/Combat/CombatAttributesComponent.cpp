@@ -23,9 +23,7 @@ bool UCombatAttributesComponent::CanInitializeAttributes(const FCombatBaseAttrib
 {
 	// Игровая логика получает конечные значения. Нулевые урон и броня допустимы.
 	return !IsHealthInitialized() &&
-		FMath::IsFinite(InBaseAttributes.MaxHealth) && InBaseAttributes.MaxHealth > 0.0f &&
-		FMath::IsFinite(InBaseAttributes.DamagePerHit) && InBaseAttributes.DamagePerHit >= 0.0f &&
-		FMath::IsFinite(InBaseAttributes.Armor) && InBaseAttributes.Armor >= 0.0f &&
+		InBaseAttributes.IsValid() &&
 		FMath::IsFinite(InCurrentHealth) && InCurrentHealth > 0.0f;
 }
 

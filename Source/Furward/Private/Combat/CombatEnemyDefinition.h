@@ -2,12 +2,13 @@
 
 /**
  * @file
- * @brief Описывает настройки вида противника, из которых сессия выбирает класс, модель и размеры областей клика.
+ * @brief Описывает настройки вида противника, из которых сессия выбирает класс, внешний вид, области клика и множители характеристик.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/CombatBaseAttributes.h"
 #include "Engine/DataAsset.h"
 #include "Templates/SubclassOf.h"
 #include "CombatEnemyDefinition.generated.h"
@@ -63,7 +64,14 @@ public:
 	 */
 	const FVector& GetMissAreaExtent() const { return MissAreaExtent; }
 
+	/** @brief Возвращает множители, применяемые к ожидаемым характеристикам этапа при спауне. */
+	const FCombatEnemyAttributeMultipliers& GetAttributeMultipliers() const { return AttributeMultipliers; }
+
 private:
+	/** @brief Относительные HP, урон и броня этого вида. Итоговые значения рассчитывает сессия. */
+	UPROPERTY(EditAnywhere, Category = "Combat|Balance")
+	FCombatEnemyAttributeMultipliers AttributeMultipliers;
+
 	/**
 	 * @brief Класс актора для данного вида, обычно BP_Combat_Enemy.
 	 *

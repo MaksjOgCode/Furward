@@ -49,9 +49,9 @@ struct FCombatStageRow : public FTableRowBase
 	FName NextStage;
 
 	/**
-	 * @brief Ожидаемый набор героя для расчёта баланса противников этого этапа.
+	 * @brief Ожидаемые максимум HP, урон и броня героя для расчёта характеристик противников этого этапа.
 	 *
-	 * Нулевой максимум HP означает, что ожидаемые характеристики ещё не заданы.
+	 * Для расчёта нужен положительный максимум HP. Сессия умножает параметры этапа на множители вида.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Combat|Balance")
 	FCombatBaseAttributes ExpectedHeroAttributes;

@@ -85,8 +85,8 @@ public:
 
 #if WITH_EDITOR
 	/**
-	 * @brief Включает пробные характеристики, формулу урона и цикл ответных атак и замены по настроенным правилам.
-	 * @param[in] InRules Загруженный GameMode ассет. При пустой ссылке пробный бой заканчивается в ChangingEnemy.
+	 * @brief Включает пробный расчёт характеристик и урона, ответные атаки и замену противника по правилам.
+	 * @param[in] InRules Загруженный GameMode ассет. Пустая ссылка оставляет пробный бой в Preparing.
 	 * @pre GameMode проверил тип мира и явное включение проверки до запроса этапа.
 	 */
 	void EnablePIECombatPreview(UCombatRulesDefinition* InRules);
@@ -296,6 +296,14 @@ private:
 	 * @return Обычный противник либо отдельное описание босса. Отсутствующее описание босса даёт nullptr.
 	 */
 	const UCombatEnemyDefinition* SelectPIEEnemyDefinition(bool bBossPending) const;
+
+	/**
+	 * @brief Получает характеристики вида для текущего этапа, включая повторный спаун и босса.
+	 * @param[in] Definition Описание вида, который сессия готовится создать.
+	 * @param[out] EnemyBase Рассчитанные значения при успехе.
+	 * @return true, если этап и описание позволяют подготовить компонент характеристик.
+	 */
+	bool ResolvePIEEnemyAttributes(const UCombatEnemyDefinition& Definition, FCombatBaseAttributes& EnemyBase) const;
 
 	/**
 	 * @brief Запускает повторяемые удары текущего противника, если пробный бой и интервалы настроены.

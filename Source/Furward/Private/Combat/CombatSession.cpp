@@ -32,12 +32,6 @@ DEFINE_LOG_CATEGORY_STATIC( LogCombatSession, Log, All );
 
 
 #if WITH_EDITOR
-namespace
-{
-// Этот набор используется только для пробного боя до подключения игрового расчёта характеристик босса.
-constexpr FCombatBaseAttributes PIEBossBase{170.0f, 16.0f, 6.0f};
-}
-
 void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
 {
 	bPIECombatPreview = true;
@@ -135,6 +129,14 @@ const FCombatStageRow* UCombatSession::FindNextStageOnActiveArena(FName& NextSta
 		Next->EnemyRoster.IsEmpty() || !IsValid(Next->EnemyRoster[0].Get()))
 	{
 		UE_LOG(LogCombatSession, Warning, TEXT("PIE next stage requires a configured enemy and the active environment."));
+		return nullptr;
+	}
+
+	FCombatBaseAttributes EnemyBase;
+	if (!Next->EnemyRoster[0]->GetAttributeMultipliers().TryApplyTo(Next->ExpectedHeroAttributes, EnemyBase))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Invalid enemy balance for next stage %s; check Expected Hero Attributes and Attribute Multipliers."),
+			*Current->NextStage.ToString());
 		return nullptr;
 	}
 
@@ -290,8 +292,11 @@ void UCombatSession::TryContinuePIECombatPreview()
 		return;
 	}
 
-	// Обычные мутанты повторяют прежний набор. Босс получает отдельные значения пробного боя.
-	const FCombatBaseAttributes EnemyBase = bBossPending ? PIEBossBase : DefeatedEnemy->GetAttributes().GetBaseAttributes();
+	FCombatBaseAttributes EnemyBase;
+	if (!ResolvePIEEnemyAttributes(*NextDefinition, EnemyBase))
+	{
+		return;
+	}
 	if (!PrepareNextEnemy(*NextDefinition, EnemyBase) || !ActivatePreparedEncounter(EncounterID, *Rules))
 	{
 		UE_LOG(LogCombatSession, Warning, TEXT("PIE combat preview could not activate the next encounter."));
@@ -320,6 +325,19 @@ const UCombatEnemyDefinition* UCombatSession::SelectPIEEnemyDefinition(bool bBos
 	}
 
 	return Definition;
+}
+
+bool UCombatSession::ResolvePIEEnemyAttributes(const UCombatEnemyDefinition& Definition, FCombatBaseAttributes& EnemyBase) const
+{
+	const FCombatStageRow* Stage = ActiveStageTable ? ActiveStageTable->FindRow<FCombatStageRow>(
+		ActiveStageID, TEXT("Combat enemy balance"), false) : nullptr;
+	if (!Stage || !Definition.GetAttributeMultipliers().TryApplyTo(Stage->ExpectedHeroAttributes, EnemyBase))
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Invalid enemy balance: Stage %s; Enemy %s. Check Expected Hero Attributes and Attribute Multipliers."),
+			*ActiveStageID.ToString(), *Definition.GetName());
+		return false;
+	}
+	return true;
 }
 
 void UCombatSession::StartPIEEnemyAttacks()
@@ -520,10 +538,20 @@ void UCombatSession::PrepareStageParticipants(UWorld& World, const ACombatArena&
 #if WITH_EDITOR
         if (bPIECombatPreview)
         {
-            // Согласованные числа проверки применяются к экземплярам после появления арены.
-            const FCombatBaseAttributes HeroBase{120.0f, 22.0f, 7.0f};
-            const FCombatBaseAttributes OrdinaryBase{85.0f, 12.0f, 4.0f};
-            const FCombatBaseAttributes& EnemyBase = bCurrentEnemyIsBoss ? PIEBossBase : OrdinaryBase;
+            const UCombatRulesDefinition* Rules = PIECombatRules.Get();
+            if (!IsValid(Rules))
+            {
+                UE_LOG(LogCombatSession, Warning, TEXT("PIE combat requires a configured Combat Rules asset."));
+                return;
+            }
+
+            FCombatBaseAttributes EnemyBase;
+            if (!ResolvePIEEnemyAttributes(*StartingDefinition, EnemyBase))
+            {
+                return;
+            }
+
+            // Пакет героя из правил применяется при первом спауне, продолжение сохраняет живой экземпляр.
             if (Hero->GetAttributes().IsHealthInitialized())
             {
                 // На той же арене герой остаётся тем же актором. Инициализируем нового противника отдельно.
@@ -537,7 +565,7 @@ void UCombatSession::PrepareStageParticipants(UWorld& World, const ACombatArena&
                     return;
                 }
             }
-            else if (InitializeParticipantAttributes(HeroBase, 70.0f, EnemyBase))
+            else if (InitializeParticipantAttributes(Rules->PIEHeroBaseAttributes, Rules->PIEHeroStartingHealth, EnemyBase))
             {
                 UE_LOG(LogCombatSession, Display, TEXT("PIE combat preview enabled."));
                 return;

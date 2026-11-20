@@ -2,12 +2,13 @@
 
 /**
  * @file
- * @brief Описывает старт следующего столкновения и интервалы ответных атак противника.
+ * @brief Описывает старт столкновения, ответные атаки и стартовые характеристики героя для проверки в PIE.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/CombatBaseAttributes.h"
 #include "Engine/DataAsset.h"
 #include "CombatRulesDefinition.generated.h"
 
@@ -45,4 +46,14 @@ public:
 	/** @brief Интервал ответных ударов в секундах. Ноль оставляет таймер выключенным. */
 	UPROPERTY(EditAnywhere, Category = "Combat|Enemy Attacks", meta = (ClampMin = "0.0"))
 	float EnemyAttackIntervalSeconds = 0.0f;
+
+#if WITH_EDITORONLY_DATA
+	/** @brief Фактический набор героя для первого входа в пробный бой. */
+	UPROPERTY(EditAnywhere, Category = "Combat|PIE")
+	FCombatBaseAttributes PIEHeroBaseAttributes;
+
+	/** @brief Текущее HP героя при первом создании в PIE. При смене этапа остаётся здоровье живого экземпляра. */
+	UPROPERTY(EditAnywhere, Category = "Combat|PIE", meta = (ClampMin = "0.0"))
+	float PIEHeroStartingHealth = 0.0f;
+#endif
 };

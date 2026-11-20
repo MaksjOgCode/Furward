@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет инициализацию здоровья, фактический урон и однократное событие смерти.
+ * @brief Проверяет расчёт характеристик противников, инициализацию здоровья, урон и однократное событие смерти.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -75,6 +75,37 @@ bool FCombatAttributesHealthTest::RunTest(const FString& Parameters)
 
 	Attributes->OnHealthChanged().Remove(HealthHandle);
 	Attributes->OnDeath().Remove(DeathHandle);
+	return true;
+}
+
+/** @brief Проверяет баланс вида от строки этапа и отказ на недопустимых данных. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCombatEnemyBalanceTest, "Furward.Combat.Attributes.EnemyBalance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
+
+bool FCombatEnemyBalanceTest::RunTest(const FString& Parameters)
+{
+	const FCombatBaseAttributes ExpectedHero{80.0f, 20.0f, 8.0f};
+	FCombatEnemyAttributeMultipliers Enemy{0.5f, 0.75f, 0.625f};
+	FCombatBaseAttributes Result;
+
+	TestTrue(TEXT("Valid stage and species produce the enemy attributes"), Enemy.TryApplyTo(ExpectedHero, Result));
+	TestEqual(TEXT("Health scales from the stage maximum"), Result.MaxHealth, 40.0f);
+	TestEqual(TEXT("Damage scales from the stage damage"), Result.DamagePerHit, 15.0f);
+	TestEqual(TEXT("Armor scales from the stage armor"), Result.Armor, 5.0f);
+	TestFalse(TEXT("An unset stage maximum is rejected"), Enemy.TryApplyTo(FCombatBaseAttributes{}, Result));
+
+	Enemy.ArmorMultiplier = 0.0f;
+	TestTrue(TEXT("Zero armor is a supported instance value"), Enemy.TryApplyTo(ExpectedHero, Result));
+	TestEqual(TEXT("Zero armor multiplier produces zero armor"), Result.Armor, 0.0f);
+
+	Enemy.DamageMultiplier = -1.0f;
+	TestFalse(TEXT("A negative multiplier is invalid even against zero base damage"),
+		Enemy.TryApplyTo(FCombatBaseAttributes{80.0f, 0.0f, 8.0f}, Result));
+	TestEqual(TEXT("A rejected calculation preserves the output"), Result.DamagePerHit, 15.0f);
+
+	const volatile float RuntimeMultiplier = std::numeric_limits<float>::max();
+	Enemy = FCombatEnemyAttributeMultipliers{RuntimeMultiplier, 1.0f, 1.0f};
+	TestFalse(TEXT("Overflow in the result is rejected"), Enemy.TryApplyTo(ExpectedHero, Result));
 	return true;
 }
 
