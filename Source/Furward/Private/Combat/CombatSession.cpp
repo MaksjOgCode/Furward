@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подготавливает первый бой, принимает атаки и закрывает доступ к погибшей цели.
+ * @brief Подготавливает бой, принимает атаки и заменяет погибшего противника в текущей арене.
  */
 
 #include "Combat/CombatSession.h"
@@ -129,7 +129,14 @@ void UCombatSession::HandleEnvironmentShown()
     // Переключаем камеру и создаём участников по точкам арены на постоянном уровне.
     Controller->UseArenaCamera(FoundArena);
     SpawnHero(*World, *FoundArena);
-    SpawnEnemy(*World, *FoundArena);
+    if (IsValid(InitialEnemy.Get()))
+    {
+        if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *InitialEnemy))
+        {
+            Enemy = SpawnedEnemy;
+            SpawnedEnemy->GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+        }
+    }
 
     if (Hero.IsValid() && Enemy.IsValid())
     {
@@ -188,19 +195,14 @@ void UCombatSession::SpawnHero(UWorld& World, const ACombatArena& Arena)
 		*SpawnedHero->GetName(), *SpawnedHero->GetLevel()->GetOutermost()->GetName());
 }
 
-void UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Arena)
+ACombatEnemy* UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Arena,
+	const UCombatEnemyDefinition& Definition)
 {
-	// Пока сессия отслеживает действующего противника, второй экземпляр не нужен.
-	if (Enemy.IsValid())
+	if (!Definition.GetEnemyClass() || !IsValid(Definition.GetStaticMesh()))
 	{
-		return;
-	}
-
-	// Для спауна должны быть назначены описание вида, класс противника и модель.
-	if (!IsValid(InitialEnemy.Get()) || !InitialEnemy->GetEnemyClass() || !IsValid(InitialEnemy->GetStaticMesh()))
-	{
-		UE_LOG(LogCombatSession, Error, TEXT("Initial enemy definition must specify a class and a static mesh."));
-		return;
+		UE_LOG(LogCombatSession, Error, TEXT("Enemy definition %s requires an enemy class and static mesh."),
+			*Definition.GetName());
+		return nullptr;
 	}
 
 	// Берём мировую точку арены и создаём актор в постоянном L_Combat.
@@ -211,23 +213,25 @@ void UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Arena)
 	SpawnParams.bDeferConstruction = true;
 
 	ACombatEnemy* SpawnedEnemy = World.SpawnActor<ACombatEnemy>(
-		InitialEnemy->GetEnemyClass().Get(), SpawnTransform, SpawnParams);
+		Definition.GetEnemyClass().Get(), SpawnTransform, SpawnParams);
 
-	// При ошибке оставляем Enemy пустым, в лог попадает причина остановки спауна.
 	if (!IsValid(SpawnedEnemy))
 	{
 		UE_LOG(LogCombatSession, Error, TEXT("Could not spawn the combat enemy."));
-		return;
+		return nullptr;
 	}
 
-	// Устанавливаем модель и области клика до FinishSpawning(), затем регистрируем экземпляр как текущую цель.
-	SpawnedEnemy->ApplyDefinition(*InitialEnemy);
+	// Применяем модель и области клика до завершения спауна и BeginPlay актора.
+	SpawnedEnemy->ApplyDefinition(Definition);
 	SpawnedEnemy->FinishSpawning(SpawnTransform);
-	Enemy = SpawnedEnemy;
-	SpawnedEnemy->GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+	if (!IsValid(SpawnedEnemy) || SpawnedEnemy->IsActorBeingDestroyed())
+	{
+		return nullptr;
+	}
 
 	UE_LOG(LogCombatSession, Display, TEXT("Enemy spawned: %s in %s using %s"),
-		*SpawnedEnemy->GetName(), *SpawnedEnemy->GetLevel()->GetOutermost()->GetName(), *InitialEnemy->GetName());
+		*SpawnedEnemy->GetName(), *SpawnedEnemy->GetLevel()->GetOutermost()->GetName(), *Definition.GetName());
+	return SpawnedEnemy;
 }
 
 void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
@@ -238,6 +242,11 @@ void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
 
 const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 {
+	if (Phase == ECombatPhase::ChangingEnemy)
+	{
+		return nullptr;
+	}
+
 	const ACombatEnemy* CurrentEnemy = Enemy.Get();
 	return CurrentEnemy && !CurrentEnemy->GetAttributes().IsDead() ? CurrentEnemy : nullptr;
 }
@@ -271,6 +280,51 @@ bool UCombatSession::InitializeParticipantAttributes(const FCombatBaseAttributes
 		EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth());
 	HeroAttributes.PublishInitialHealth();
 	EnemyAttributes.PublishInitialHealth();
+	return true;
+}
+
+bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, const FCombatBaseAttributes& EnemyBase)
+{
+	ACombatEnemy* PreviousEnemy = Enemy.Get();
+	ACombatArena* Arena = ActiveArena.Get();
+	const ACombatHero* CurrentHero = Hero.Get();
+	if (Phase != ECombatPhase::ChangingEnemy || !PreviousEnemy || !PreviousEnemy->GetAttributes().IsDead() ||
+		!Arena || !CurrentHero || CurrentHero->GetAttributes().IsDead() ||
+		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
+	{
+		return false;
+	}
+
+	UWorld* World = Arena->GetWorld();
+	ACombatEnemy* NextEnemy = World ? SpawnEnemy(*World, *Arena, Definition) : nullptr;
+	if (!NextEnemy)
+	{
+		return false;
+	}
+
+	// Пока замена не готова, оставляем погибшего актора и даём вызывающему коду повторить операцию.
+	UCombatAttributesComponent& NextAttributes = NextEnemy->GetAttributes();
+	if (!NextAttributes.CanInitializeAttributes(EnemyBase, EnemyBase.MaxHealth))
+	{
+		NextEnemy->Destroy();
+		return false;
+	}
+
+	UCombatAttributesComponent& PreviousAttributes = PreviousEnemy->GetAttributes();
+	if (!PreviousEnemy->Destroy())
+	{
+		NextEnemy->Destroy();
+		return false;
+	}
+	// Destroy удаляет актора из мира, а его UObject и компоненты освобождает сборщик мусора.
+	PreviousAttributes.OnDeath().RemoveAll(this);
+	Enemy = NextEnemy;
+	NextAttributes.OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+	NextAttributes.SetInitialAttributes(EnemyBase, EnemyBase.MaxHealth);
+
+	UE_LOG(LogCombatSession, Display, TEXT("Next enemy prepared: %s; HP: %.2f/%.2f"),
+		*NextEnemy->GetName(), NextAttributes.GetCurrentHealth(), NextAttributes.GetMaxHealth());
+	NextAttributes.PublishInitialHealth();
 	return true;
 }
 

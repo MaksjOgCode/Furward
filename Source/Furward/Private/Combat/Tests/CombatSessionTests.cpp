@@ -2,13 +2,14 @@
 
 /**
  * @file
- * @brief Проверяет на L_Combat подготовку сцены, допуск атаки и старт боя после урона.
+ * @brief Проверяет в L_Combat подготовку сцены, допуск атак, смерть и смену противника.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Combat/CombatAttributesComponent.h"
 #include "Combat/CombatEnemy.h"
+#include "Combat/CombatEnemyDefinition.h"
 #include "Combat/CombatGameMode.h"
 #include "Combat/CombatHero.h"
 #include "Combat/CombatSession.h"
@@ -18,7 +19,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
-/** @brief Проверяет допуск кликов, применение урона и завершение боя с текущей целью. */
+/** @brief Проверяет допуск кликов, завершение боя и подготовку следующей цели. */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCombatClickCommandTest, "Furward.Combat.ClickCommandValidation",
 	EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
 
@@ -158,6 +159,51 @@ bool FVerifyCombatClickCommands::Update()
 	Test->TestEqual(TEXT("Death is published once"), DeathEventCount, 1);
 	EnemyAttributes.OnHealthChanged().Remove(DamageHandle);
 	EnemyAttributes.OnDeath().Remove(DeathHandle);
+
+	// Повторно используем описание вида, чтобы проверить замену экземпляра в той же арене.
+	const UCombatEnemyDefinition* NextDefinition = LoadObject<UCombatEnemyDefinition>(nullptr,
+		TEXT("/Game/Combat-System/Data/DA_Combat_Enemy_Mutant.DA_Combat_Enemy_Mutant"));
+	if (!Test->TestNotNull(TEXT("The mutant definition is available for the next encounter"), NextDefinition))
+	{
+		return true;
+	}
+
+	const FTransform PreviousTransform = Target->GetActorTransform();
+	Test->TestFalse(TEXT("Incomplete attributes cannot replace the defeated enemy"),
+		Session->PrepareNextEnemy(*NextDefinition, FCombatBaseAttributes{}));
+	TArray<AActor*> Enemies;
+	UGameplayStatics::GetAllActorsOfClass(World, ACombatEnemy::StaticClass(), Enemies);
+	Test->TestTrue(TEXT("Failed preparation keeps only the defeated enemy"),
+		Enemies.Num() == 1 && Enemies[0] == Target);
+
+	if (!Test->TestTrue(TEXT("Valid data prepares the next enemy"),
+		Session->PrepareNextEnemy(*NextDefinition, EnemyBase)))
+	{
+		return true;
+	}
+
+	UGameplayStatics::GetAllActorsOfClass(World, ACombatEnemy::StaticClass(), Enemies);
+	if (!Test->TestEqual(TEXT("Exactly one enemy remains after replacement"), Enemies.Num(), 1))
+	{
+		return true;
+	}
+
+	const ACombatEnemy* NextEnemy = CastChecked<ACombatEnemy>(Enemies[0]);
+	Test->TestTrue(TEXT("The next enemy is a new instance at the same arena spawn point"),
+		NextEnemy != Target && NextEnemy->GetActorTransform().Equals(PreviousTransform));
+	Test->TestTrue(TEXT("The next enemy belongs to the persistent level"),
+		NextEnemy->GetLevel() == World->PersistentLevel.Get());
+	Test->TestEqual(TEXT("The next enemy starts at full health"),
+		NextEnemy->GetAttributes().GetCurrentHealth(), EnemyBase.MaxHealth);
+	Test->TestEqual(TEXT("Replacing the enemy preserves the hero's current HP"), HeroAttributes.GetCurrentHealth(), 70.0f);
+	Test->TestTrue(TEXT("Preparing the next enemy keeps the session in ChangingEnemy"),
+		Session->GetPhase() == ECombatPhase::ChangingEnemy);
+	Test->TestTrue(TEXT("The next enemy stays unavailable to cursor tracing"),
+		Session->GetActiveEnemy() == nullptr);
+	Test->TestEqual(TEXT("The next enemy cannot take damage before the phase transition"),
+		Session->ApplyResolvedDamageToEnemy(NextEnemy, 10.0f), 0.0f);
+	Test->TestFalse(TEXT("Repeated preparation cannot replace a living enemy"),
+		Session->PrepareNextEnemy(*NextDefinition, EnemyBase));
 
 	return true;
 }
