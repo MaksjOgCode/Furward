@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает актора противника, его визуальную модель и области Hit и Miss.
+ * @brief Описывает противника, его модель, области клика и компонент характеристик.
  */
 
 #pragma once
@@ -12,6 +12,7 @@
 #include "CombatEnemy.generated.h"
 
 class UBoxComponent;
+class UCombatAttributesComponent;
 class UCombatEnemyDefinition;
 class UStaticMeshComponent;
 
@@ -19,7 +20,7 @@ class UStaticMeshComponent;
  * @brief Представляет экземпляр противника, по которому контроллер проверяет клик.
  *
  * UCombatSession создаёт его в постоянном L_Combat и применяет описание вида до завершения спауна.
- * Модель и обе области принадлежат актору и существуют вместе с ним.
+ * Модель, обе области и компонент характеристик принадлежат актору и существуют вместе с ним.
  */
 UCLASS()
 class ACombatEnemy : public AActor
@@ -27,7 +28,7 @@ class ACombatEnemy : public AActor
 	GENERATED_BODY()
 
 public:
-	/** @brief Создаёт SceneRoot, компонент модели и две области клика при создании актора. */
+	/** @brief Создаёт SceneRoot, модель, области клика и компонент характеристик противника. */
 	ACombatEnemy();
 
 	/**
@@ -51,6 +52,15 @@ public:
 	UBoxComponent& GetMissArea() const;
 
 private:
+	/**
+	 * @brief Компонент характеристик, созданный конструктором на время жизни противника.
+	 *
+	 * Здоровье противника задаётся после расчёта его характеристик.
+	 * VisibleAnywhere показывает компонент у Blueprint и его экземпляров.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Combat|Attributes")
+	TObjectPtr<UCombatAttributesComponent> Attributes;
+
 	/**
 	 * @brief Статическое представление противника, созданное конструктором.
 	 *

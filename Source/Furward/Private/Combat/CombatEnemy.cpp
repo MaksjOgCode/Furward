@@ -2,10 +2,11 @@
 
 /**
  * @file
- * @brief Собирает компоненты противника и настраивает модель и области клика перед появлением актора в бою.
+ * @brief Создаёт компоненты противника и применяет модель и области клика из описания вида.
  */
 
 #include "Combat/CombatEnemy.h"
+#include "Combat/CombatAttributesComponent.h"
 #include "Combat/CombatEnemyDefinition.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
@@ -50,6 +51,9 @@ void ApplyClickArea(UBoxComponent& Area, const FVector& Center, const FVector& E
 ACombatEnemy::ACombatEnemy()
 {
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot")));
+
+	// У каждого противника своё состояние здоровья. Компонент создаётся вместе с актором.
+	Attributes = CreateDefaultSubobject<UCombatAttributesComponent>(TEXT("Attributes"));
 
 	// Модель даёт внешний вид. Коллизии для клика принадлежат отдельным компонентам HitArea и MissArea.
 	StaticVisual = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StaticVisual"));
