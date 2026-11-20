@@ -140,6 +140,15 @@ void UFurwardSaveSubsystem::HandleSaveFinished(const FString& SlotName, int32 Us
 		Status.bLatestWriteFailed = !bSuccess;
 	}
 
+	if (bSuccess)
+	{
+		UE_LOG(LogFurwardSave, Display, TEXT("Profile save confirmed: %s; Revision: %lld"), *SlotName, WrittenRevision);
+	}
+	else
+	{
+		UE_LOG(LogFurwardSave, Warning, TEXT("Profile save failed: %s; Revision: %lld"), *SlotName, WrittenRevision);
+	}
+
 	// Пока идёт уведомление, запросы из слушателей могут пополнить очередь. Их запуск начнётся после Broadcast().
 	SaveFinished.Broadcast(SavedSlot, WrittenRevision, bSuccess);
 	ActiveSave.Reset();

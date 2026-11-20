@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Готовит столкновения, фиксирует исход и ждёт записи перед сменой этапа или выходом.
+ * @brief Готовит столкновения, сохраняет победы и ждёт актуальной записи перед сменой этапа или выходом.
  */
 
 #include "Combat/CombatSession.h"
@@ -69,9 +69,8 @@ bool UCombatSession::BeginPIEProgressSave(FName Slot, EProgressSaveAction Action
 		return false;
 	}
 
-	const UWorld* World = GetOuter()->GetWorld();
 	const UFurwardProfileSubsystem* Profile = GetProfile();
-	UFurwardSaveSubsystem* Save = World ? UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(World->GetGameInstance()) : nullptr;
+	UFurwardSaveSubsystem* Save = GetSaveSubsystem();
 	if (!Profile || !Save || (PIEProgressSlot.IsNone() &&
 		UGameplayStatics::DoesSaveGameExist(Slot.ToString(), UFurwardSaveSubsystem::LocalUserIndex)))
 	{
@@ -254,6 +253,29 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 	PrepareStageParticipants(*World, *Arena);
 }
 
+UFurwardSaveSubsystem* UCombatSession::GetSaveSubsystem() const
+{
+	const UWorld* World = GetOuter()->GetWorld();
+	return World ? UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(World->GetGameInstance()) : nullptr;
+}
+
+void UCombatSession::QueuePIEProgressAutosave(const UFurwardProfileSubsystem& Profile)
+{
+	if (PIEProgressSlot.IsNone())
+	{
+		return;
+	}
+
+	UFurwardSaveSubsystem* Save = GetSaveSubsystem();
+	const int64 Revision = Profile.GetRevision();
+	if (Save && Save->RequestSave(PIEProgressSlot, Profile.CreateSnapshot()))
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("Combat autosave queued: %s; Revision: %lld"), *PIEProgressSlot.ToString(), Revision);
+		return;
+	}
+	UE_LOG(LogCombatSession, Warning, TEXT("Combat autosave request rejected: %s; Revision: %lld"), *PIEProgressSlot.ToString(), Revision);
+}
+
 void UCombatSession::TryContinuePIECombatPreview()
 {
 	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet())
@@ -271,6 +293,8 @@ void UCombatSession::TryContinuePIECombatPreview()
 	const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
 	UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
 		*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
+	QueuePIEProgressAutosave(*Profile);
+
 	const bool bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
 	const UCombatEnemyDefinition* NextDefinition = SelectPIEEnemyDefinition(bBossPending);
 
@@ -911,6 +935,12 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	}
 
 	EnterStageCompleted();
+#if WITH_EDITOR
+	if (bPIECombatPreview)
+	{
+		QueuePIEProgressAutosave(*Profile);
+	}
+#endif
 }
 
 void UCombatSession::HandleHeroDeath(const UCombatAttributesComponent& Source)
