@@ -48,7 +48,7 @@ public:
 
 	/**
 	 * @brief Передаёт сессии команду подготовки следующего этапа после записи прогресса.
-	 * @param[in] SaveSlot Новый выделенный слот текущей проверки PIE.
+	 * @param[in] SaveSlot Выделенный слот PIE. При наличии PIE Profile Slot используется его имя.
 	 * @return true, если сессия приняла команду продолжения.
 	 */
 	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Stage")

@@ -87,9 +87,10 @@ public:
 	/**
 	 * @brief Включает пробный расчёт характеристик и урона, ответные атаки и замену противника по правилам.
 	 * @param[in] InRules Загруженный GameMode ассет. Пустая ссылка оставляет пробный бой в Preparing.
-	 * @pre GameMode проверил тип мира и явное включение проверки до запроса этапа.
+	 * @param[in] OpenedSlot Открытый GameMode слот пробного профиля или None до выбора слота.
+	 * @pre GameMode проверил тип мира, включение PIE и открыл указанный слот до запроса этапа.
 	 */
-	void EnablePIECombatPreview(UCombatRulesDefinition* InRules);
+	void EnablePIECombatPreview(UCombatRulesDefinition* InRules, FName OpenedSlot);
 
 	/**
 	 * @brief Принимает команду на следующий этап пробной экспедиции и запрашивает запись прогресса.
@@ -281,7 +282,7 @@ private:
 	/** @brief Дескриптор подписки на результаты записи. */
 	FDelegateHandle ProgressSaveListener;
 
-	/** @brief Выделенный слот проверки, уже принятый этой сессией. */
+	/** @brief Выделенный слот PIE, открытый при входе или принятый при первой записи. */
 	FName PIEProgressSlot;
 
 	/** @brief Действие, которое ждёт сохранения актуальной ревизии. */

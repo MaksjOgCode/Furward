@@ -32,10 +32,11 @@ DEFINE_LOG_CATEGORY_STATIC( LogCombatSession, Log, All );
 
 
 #if WITH_EDITOR
-void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules)
+void UCombatSession::EnablePIECombatPreview(UCombatRulesDefinition* InRules, FName OpenedSlot)
 {
 	bPIECombatPreview = true;
 	PIECombatRules = InRules;
+	PIEProgressSlot = OpenedSlot;
 }
 
 bool UCombatSession::RequestNextStage(FName SaveSlot)
@@ -505,6 +506,12 @@ void UCombatSession::PrepareStageParticipants(UWorld& World, const ACombatArena&
     const UCombatEnemyDefinition* StartingDefinition = InitialEnemy.Get();
 #if WITH_EDITOR
     const UFurwardProfileSubsystem* Profile = bPIECombatPreview ? GetProfile() : nullptr;
+    if (Profile)
+    {
+        UE_LOG(LogCombatSession, Display, TEXT("PIE expedition progress at entry: %s; %d/%d"),
+            *ActiveStageID.ToString(), Profile->GetExpeditionClearCount(ActiveStageID),
+            UFurwardProfileSubsystem::RequiredExpeditionClears);
+    }
     if (Profile && Profile->IsExpeditionStageCompleted(ActiveStageID))
     {
         EnterStageCompleted();

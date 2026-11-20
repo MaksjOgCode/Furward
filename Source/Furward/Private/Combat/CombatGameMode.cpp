@@ -8,7 +8,10 @@
 #include "CombatGameMode.h"
 #include "CombatRulesDefinition.h"
 #include "CombatSession.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Profile/FurwardProfileSubsystem.h"
+#include "Save/FurwardSaveSubsystem.h"
 #include "UObject/UObjectGlobals.h"
 
 
@@ -38,7 +41,19 @@ void ACombatGameMode::BeginPlay() {
 	// Play In Editor должен быть выбран и как тип мира, и как режим проверки в Class Defaults.
 	if (bEnablePIECombatPreview && GetWorld()->WorldType == EWorldType::PIE)
 	{
-		CombatSession->EnablePIECombatPreview(CombatRules.LoadSynchronous());
+		if (!PIEProfileSlot.IsNone())
+		{
+			UGameInstance* GameInstance = GetGameInstance();
+			UFurwardSaveSubsystem* Save = UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(GameInstance);
+			UFurwardProfileSubsystem* Profile = UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(GameInstance);
+			if (!Save || !Profile || !Save->TryOpenProfileSlot(PIEProfileSlot, *Profile))
+			{
+				UE_LOG(LogCombatGameMode, Warning, TEXT("PIE profile slot unavailable: %s; combat remains in Preparing."),
+					*PIEProfileSlot.ToString());
+				return;
+			}
+		}
+		CombatSession->EnablePIECombatPreview(CombatRules.LoadSynchronous(), PIEProfileSlot);
 	}
 #endif
 

@@ -8,6 +8,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Save/FurwardSaveGame.h"
+#include "Save/FurwardSaveSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/AutomationTest.h"
@@ -81,13 +82,17 @@ bool FFurwardProfileSaveRoundTripTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	UFurwardProfileSubsystem* Restored = NewObject<UFurwardProfileSubsystem>(NewObject<UGameInstance>());
-	if (!TestTrue(TEXT("Restore the saved snapshot into another profile"), Restored->TryRestoreSnapshot(*Snapshot)))
+	UGameInstance* RestoredGame = NewObject<UGameInstance>();
+	UFurwardProfileSubsystem* Restored = NewObject<UFurwardProfileSubsystem>(RestoredGame);
+	UFurwardSaveSubsystem* Save = NewObject<UFurwardSaveSubsystem>(RestoredGame);
+	const FName OpenedSlot(*SlotName);
+	if (!TestTrue(TEXT("Open the existing slot for a new game instance"), Save->TryOpenProfileSlot(OpenedSlot, *Restored)))
 	{
 		return false;
 	}
 
-	TestEqual(TEXT("Load restores the saved revision"), Restored->CreateSnapshot().Revision, SavedRevision);
+	TestEqual(TEXT("Load restores the saved revision"), Restored->GetRevision(), SavedRevision);
+	TestTrue(TEXT("A loaded revision is already confirmed on disk"), Save->GetSaveStatus(OpenedSlot).IsLatestRevisionSaved(SavedRevision));
 	TestTrue(TEXT("Load restores the completed stage"), Restored->IsExpeditionStageCompleted(FinishedStage));
 	TestEqual(TEXT("Load restores ten clears for the completed stage"),
 		Restored->GetExpeditionClearCount(FinishedStage), UFurwardProfileSubsystem::RequiredExpeditionClears);
@@ -102,7 +107,25 @@ bool FFurwardProfileSaveRoundTripTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Reject a corrupt snapshot with a completed stage below ten clears"),
 		Restored->TryRestoreSnapshot(InvalidSnapshot));
 	TestFalse(TEXT("Rejected data does not change the completion flag"), Restored->IsExpeditionStageCompleted(PartialStage));
-	TestEqual(TEXT("Rejected data does not replace the active revision"), Restored->CreateSnapshot().Revision, SavedRevision);
+	TestEqual(TEXT("Rejected data does not replace the active revision"), Restored->GetRevision(), SavedRevision);
+
+	TestTrue(TEXT("The reopened profile accepts one more clear"), Restored->TryRecordExpeditionClear(PartialStage, FGuid::NewGuid()));
+	TestTrue(TEXT("Reentering with the same slot succeeds"), Save->TryOpenProfileSlot(OpenedSlot, *Restored));
+	TestEqual(TEXT("Reentry preserves unsaved progress within the same game instance"), Restored->GetRevision(), SavedRevision + 1);
+	TestFalse(TEXT("A different slot cannot replace the active profile"), Save->TryOpenProfileSlot(TEXT("AnotherProfile"), *Restored));
+
+	// Повреждённый снимок записывается только в выделенный тестовый слот.
+	SaveGame->SetProfileSnapshot(InvalidSnapshot);
+	if (!TestTrue(TEXT("Write an inconsistent test fixture"), UGameplayStatics::SaveGameToSlot(SaveGame, SlotName, UserIndex)))
+	{
+		return false;
+	}
+	UGameInstance* FreshGame = NewObject<UGameInstance>();
+	UFurwardProfileSubsystem* FreshProfile = NewObject<UFurwardProfileSubsystem>(FreshGame);
+	UFurwardSaveSubsystem* FreshSave = NewObject<UFurwardSaveSubsystem>(FreshGame);
+	TestFalse(TEXT("Reject a slot with inconsistent progress"), FreshSave->TryOpenProfileSlot(OpenedSlot, *FreshProfile));
+	TestEqual(TEXT("A failed load keeps the new profile empty"), FreshProfile->GetRevision(), int64{0});
+	TestEqual(TEXT("A failed load confirms no revision"), FreshSave->GetSaveStatus(OpenedSlot).LastSavedRevision, int64{-1});
 
 	return true;
 }

@@ -27,7 +27,7 @@ class ACombatHero;
  * @brief Владеет одной UCombatSession на время посещения карты L_Combat.
  *
  * Unreal создаёт экземпляр BP_Combat_GameMode для игрового мира.
- * В Class Defaults задают класс героя, строку начального этапа и ассет боевых правил.
+ * В Class Defaults задают героя, начальный этап, правила и слот профиля для проверки PIE.
  */
 UCLASS()
 class ACombatGameMode : public AGameModeBase
@@ -55,7 +55,7 @@ protected:
 	/**
 	 * @brief Передаёт сессии начальный этап, когда Unreal запускает карту.
 	 *
-	 * Сессия читает строку таблицы. Для включённой проверки PIE GameMode сперва загружает боевые правила.
+	 * Для проверки PIE GameMode сперва открывает выбранный слот и загружает правила. Затем сессия читает строку этапа.
 	 * @pre InitGame() создал CombatSession.
 	 * @see UCombatSession::RequestInitialStage
 	 */
@@ -95,6 +95,14 @@ private:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|PIE", meta = (DisplayName = "Enable PIE Combat Preview"))
 	bool bEnablePIECombatPreview = false;
+
+	/**
+	 * @brief Выделенный слот, который пробный бой открывает перед запросом начального этапа.
+	 *
+	 * None запускает пробный бой без загрузки с диска. Для именованного слота ошибка чтения останавливает подготовку.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|PIE", meta = (DisplayName = "PIE Profile Slot"))
+	FName PIEProfileSlot;
 #endif
 
 	/**

@@ -72,6 +72,9 @@ public:
 	 */
 	FFurwardProfileSnapshot CreateSnapshot() const;
 
+	/** @brief Возвращает ревизию прогресса без копирования снимка. Ноль соответствует новому профилю. */
+	int64 GetRevision() const { return Progress.Revision; }
+
 	/**
 	 * @brief Проверяет и восстанавливает прогресс из загруженного снимка.
 	 * @param[in] Snapshot Данные поддерживаемой версии сохранения.

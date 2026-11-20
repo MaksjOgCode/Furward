@@ -2,21 +2,72 @@
 
 /**
  * @file
- * @brief Запускает последовательные асинхронные записи и отмечает подтверждённые ревизии.
+ * @brief Открывает слот, передаёт данные профилю и отмечает подтверждённые ревизии последовательной записи.
  */
 
 #include "Save/FurwardSaveSubsystem.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/Paths.h"
+#include "Profile/FurwardProfileSubsystem.h"
 #include "Save/FurwardSaveGame.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogFurwardSave, Log, All);
+
+namespace
+{
+/** @brief Проверяет, что имя соответствует одному слоту без пути к каталогу. */
+bool IsValidSlotName(FName SlotName)
+{
+	const FString Name = SlotName.ToString();
+	return !SlotName.IsNone() && FPaths::GetCleanFilename(Name) == Name && FPaths::ValidatePath(Name);
+}
+}
+
+bool UFurwardSaveSubsystem::TryOpenProfileSlot(FName SlotName, UFurwardProfileSubsystem& Profile)
+{
+	check(IsInGameThread());
+
+	if (bDeinitializing || !IsValidSlotName(SlotName) || Profile.GetGameInstance() != GetGameInstance())
+	{
+		return false;
+	}
+	if (OpenedProfileSlot == SlotName)
+	{
+		return true;
+	}
+	if (!OpenedProfileSlot.IsNone() || Profile.GetRevision() != 0 || ActiveSave.IsSet() || !PendingSaves.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString Name = SlotName.ToString();
+	if (UGameplayStatics::DoesSaveGameExist(Name, LocalUserIndex))
+	{
+		const UFurwardSaveGame* SavedGame = Cast<UFurwardSaveGame>(UGameplayStatics::LoadGameFromSlot(Name, LocalUserIndex));
+		const FFurwardProfileSnapshot* Snapshot = SavedGame ? SavedGame->GetProfileSnapshot() : nullptr;
+		if (!Snapshot || !Profile.TryRestoreSnapshot(*Snapshot))
+		{
+			UE_LOG(LogFurwardSave, Warning, TEXT("Profile slot could not be loaded: %s"), *Name);
+			return false;
+		}
+
+		StatusBySlot.Add(SlotName, FFurwardSaveStatus{Snapshot->Revision, Snapshot->Revision, false});
+		UE_LOG(LogFurwardSave, Display, TEXT("Profile slot loaded: %s; Revision: %lld"), *Name, Snapshot->Revision);
+	}
+	else
+	{
+		UE_LOG(LogFurwardSave, Display, TEXT("New profile slot: %s"), *Name);
+	}
+
+	OpenedProfileSlot = SlotName;
+	return true;
+}
 
 bool UFurwardSaveSubsystem::RequestSave(FName SlotName, FFurwardProfileSnapshot Snapshot)
 {
 	check(IsInGameThread());
 
-	const FString SlotPath = SlotName.ToString();
-	if (bDeinitializing || SlotName.IsNone() || Snapshot.Revision < 0 ||
-		FPaths::GetCleanFilename(SlotPath) != SlotPath || !FPaths::ValidatePath(SlotPath))
+	if (bDeinitializing || Snapshot.Revision < 0 || !IsValidSlotName(SlotName))
 	{
 		return false;
 	}
@@ -101,6 +152,7 @@ void UFurwardSaveSubsystem::Deinitialize()
 	PendingSaves.Reset();
 	ActiveSave.Reset();
 	StatusBySlot.Reset();
+	OpenedProfileSlot = NAME_None;
 	SaveFinished.Clear();
 	Super::Deinitialize();
 }
