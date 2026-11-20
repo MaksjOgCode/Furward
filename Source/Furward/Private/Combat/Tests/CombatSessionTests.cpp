@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет в L_Combat подготовку сцены, допуск атак, смерть и смену противника.
+ * @brief Проверяет в L_Combat допуск атак, однократную фиксацию исхода и смену противника.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -54,6 +54,10 @@ bool FVerifyCombatClickCommands::Update()
 	{
 		return true;
 	}
+
+	const FGuid FirstEncounterID = Session->GetEncounterID();
+	Test->TestTrue(TEXT("The first enemy has an encounter ID"), FirstEncounterID.IsValid());
+	Test->TestFalse(TEXT("An unfinished encounter has no result"), Session->GetEncounterResult().IsSet());
 
 	// Имитируем два независимых источника готовых характеристик.
 	const FCombatBaseAttributes HeroBase{120.0f, 22.0f, 7.0f};
@@ -140,6 +144,7 @@ bool FVerifyCombatClickCommands::Update()
 		Session->ApplyResolvedDamageToEnemy(Target, 25.0f), 25.0f);
 	Test->TestTrue(TEXT("First positive damage starts combat"), Session->GetPhase() == ECombatPhase::Fighting);
 	Test->TestEqual(TEXT("Enemy loses the applied HP"), EnemyAttributes.GetCurrentHealth(), 60.0f);
+	Test->TestFalse(TEXT("Nonlethal damage leaves the encounter without a result"), Session->GetEncounterResult().IsSet());
 	Test->TestTrue(TEXT("Fighting accepts further clicks"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
 
@@ -151,12 +156,20 @@ bool FVerifyCombatClickCommands::Update()
 	Test->TestTrue(TEXT("Dead enemy is no longer a click target"), Session->GetActiveEnemy() == nullptr);
 	Test->TestFalse(TEXT("Dead enemy hit area is disabled"), Target->GetHitArea().IsQueryCollisionEnabled());
 	Test->TestFalse(TEXT("Dead enemy miss area is disabled"), Target->GetMissArea().IsQueryCollisionEnabled());
+	const TOptional<FCombatEncounterResult> FirstResult = Session->GetEncounterResult();
+	Test->TestTrue(TEXT("Enemy death records a result for its encounter"),
+		FirstResult.IsSet() && FirstResult.GetValue().EncounterID == FirstEncounterID);
 	Test->TestEqual(TEXT("Dead targets reject further damage"),
 		Session->ApplyResolvedDamageToEnemy(Target, 10.0f), 0.0f);
 	Test->TestFalse(TEXT("Dead targets reject further clicks"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
 	Test->TestEqual(TEXT("Two health changes are published"), HealthEventCount, 2);
 	Test->TestEqual(TEXT("Death is published once"), DeathEventCount, 1);
+	const TOptional<FCombatEncounterResult> ResultAfterRetry = Session->GetEncounterResult();
+	Test->TestTrue(TEXT("Repeated damage and clicks preserve the original result"),
+		FirstResult.IsSet() && ResultAfterRetry.IsSet() &&
+		ResultAfterRetry.GetValue().EncounterID == FirstResult.GetValue().EncounterID &&
+		ResultAfterRetry.GetValue().EnemyDefinitionID == FirstResult.GetValue().EnemyDefinitionID);
 	EnemyAttributes.OnHealthChanged().Remove(DamageHandle);
 	EnemyAttributes.OnDeath().Remove(DeathHandle);
 
@@ -168,6 +181,10 @@ bool FVerifyCombatClickCommands::Update()
 		return true;
 	}
 
+	Test->TestTrue(TEXT("The result identifies the defeated mutant's Data Asset"),
+		FirstResult.IsSet() && FirstResult.GetValue().EnemyDefinitionID.IsValid() &&
+		FirstResult.GetValue().EnemyDefinitionID == NextDefinition->GetPrimaryAssetId());
+
 	const FTransform PreviousTransform = Target->GetActorTransform();
 	Test->TestFalse(TEXT("Incomplete attributes cannot replace the defeated enemy"),
 		Session->PrepareNextEnemy(*NextDefinition, FCombatBaseAttributes{}));
@@ -175,6 +192,9 @@ bool FVerifyCombatClickCommands::Update()
 	UGameplayStatics::GetAllActorsOfClass(World, ACombatEnemy::StaticClass(), Enemies);
 	Test->TestTrue(TEXT("Failed preparation keeps only the defeated enemy"),
 		Enemies.Num() == 1 && Enemies[0] == Target);
+	const TOptional<FCombatEncounterResult> ResultAfterFailedReplacement = Session->GetEncounterResult();
+	Test->TestTrue(TEXT("Failed preparation preserves the defeat result"),
+		ResultAfterFailedReplacement.IsSet() && ResultAfterFailedReplacement.GetValue().EncounterID == FirstEncounterID);
 
 	if (!Test->TestTrue(TEXT("Valid data prepares the next enemy"),
 		Session->PrepareNextEnemy(*NextDefinition, EnemyBase)))
@@ -189,6 +209,10 @@ bool FVerifyCombatClickCommands::Update()
 	}
 
 	const ACombatEnemy* NextEnemy = CastChecked<ACombatEnemy>(Enemies[0]);
+	const FGuid NextEncounterID = Session->GetEncounterID();
+	Test->TestTrue(TEXT("Every encounter obtains a distinct ID, even for the same enemy definition"),
+		NextEncounterID.IsValid() && NextEncounterID != FirstEncounterID);
+	Test->TestFalse(TEXT("The new encounter starts with no result"), Session->GetEncounterResult().IsSet());
 	Test->TestTrue(TEXT("The next enemy is a new instance at the same arena spawn point"),
 		NextEnemy != Target && NextEnemy->GetActorTransform().Equals(PreviousTransform));
 	Test->TestTrue(TEXT("The next enemy belongs to the persistent level"),

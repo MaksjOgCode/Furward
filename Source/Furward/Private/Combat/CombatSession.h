@@ -2,12 +2,14 @@
 
 /**
  * @file
- * @brief Описывает подготовку этапа, приём атак и смену противника в L_Combat.
+ * @brief Описывает подготовку боя, фиксацию исхода и смену противника в L_Combat.
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/CombatEncounterResult.h"
+#include "Misc/Optional.h"
 #include "Templates/SubclassOf.h"
 #include "UObject/Object.h"
 #include "CombatSession.generated.h"
@@ -56,7 +58,7 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия принимает смерть от компонента характеристик текущего противника и готовит его замену после обработки исхода.
+ * Сессия принимает смерть от компонента характеристик противника и формирует результат по идентификатору столкновения.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -93,7 +95,7 @@ public:
 	 * @brief Блокирует команды, снимает подписку на смерть противника и запрашивает выгрузку окружения.
 	 *
 	 * GameMode вызывает метод в EndPlay() перед освобождением сессии.
-	 * @post Ссылки на участников, арену, описание противника и объект стриминга очищены.
+	 * @post Ссылки на сцену, идентификатор и результат текущего столкновения очищены.
 	 * @note Unreal может завершить выгрузку позже.
 	 */
 	void Shutdown();
@@ -120,9 +122,9 @@ public:
 	 * @brief Заменяет погибшего обычного противника в точке спауна текущей арены.
 	 * @param[in] Definition Выбранное описание следующего противника.
 	 * @param[in] EnemyBase Рассчитанные характеристики следующего противника.
-	 * @pre Сессия находится в ChangingEnemy, исход обработан вызывающим кодом, арена видима, герой жив.
+	 * @pre Сессия находится в ChangingEnemy и сформировала результат. Вызывающий код обработал его. Арена видима, герой жив.
 	 * @return true, если погибший актор удалён и новый подготовлен с полным HP.
-	 * @post Фаза остаётся ChangingEnemy. Здоровье героя сохраняется, команды атаки заблокированы.
+	 * @post У нового столкновения свой EncounterID. Фаза остаётся ChangingEnemy, атаки заблокированы, HP героя сохраняется.
 	 */
 	bool PrepareNextEnemy(const UCombatEnemyDefinition& Definition, const FCombatBaseAttributes& EnemyBase);
 
@@ -151,6 +153,18 @@ public:
 	 * @return Фаза подготовки, боя или завершения.
 	 */
 	ECombatPhase GetPhase() const { return Phase; }
+
+	/**
+	 * @brief Возвращает идентификатор столкновения, к которому относится текущий противник.
+	 * @return EncounterID, созданный после спауна. До спауна и после Shutdown() идентификатор недействителен.
+	 */
+	FGuid GetEncounterID() const { return EncounterID; }
+
+	/**
+	 * @brief Возвращает сформированный результат текущего столкновения для дальнейшей обработки.
+	 * @return Копия результата, если противник погиб. При регистрации нового противника результат очищается.
+	 */
+	TOptional<FCombatEncounterResult> GetEncounterResult() const { return EncounterResult; }
 
 private:
 	/**
@@ -217,10 +231,18 @@ private:
 	ACombatEnemy* SpawnEnemy(UWorld& World, const ACombatArena& Arena, const UCombatEnemyDefinition& Definition);
 
 	/**
-	 * @brief Принимает смерть текущего противника и закрывает приём атак по нему.
+	 * @brief Регистрирует актор, выдаёт столкновению новый EncounterID и подписывается на смерть.
+	 * @param[in,out] SpawnedEnemy Актор, созданный в постоянном уровне.
+	 * @param[in] Definition Описание вида, применённое при спауне актора.
+	 * @post Ссылка указывает на нового противника, а результат предыдущего столкновения очищен.
+	 */
+	void RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnemyDefinition& Definition);
+
+	/**
+	 * @brief Принимает смерть текущего противника и формирует результат столкновения.
 	 * @param[in] Source Компонент характеристик, опубликовавший OnDeath после обнуления HP.
 	 * @post Если сессия в Fighting и Source принадлежит текущей цели с нулевым HP,
-	 * сессия переходит в ChangingEnemy и отключает области клика цели.
+	 * сессия переходит в ChangingEnemy, отключает области клика цели и сохраняет результат один раз.
 	 */
 	void HandleEnemyDeath(const UCombatAttributesComponent& Source);
 
@@ -256,4 +278,13 @@ private:
 	 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACombatEnemy> Enemy;
+
+	/** @brief Уникальный идентификатор столкновения с момента регистрации противника до замены или Shutdown(). */
+	FGuid EncounterID;
+
+	/** @brief Идентификатор Data Asset текущего противника для результата столкновения. */
+	FPrimaryAssetId EnemyDefinitionID;
+
+	/** @brief Результат после смерти противника. Сохраняется до регистрации следующего или завершения сессии. */
+	TOptional<FCombatEncounterResult> EncounterResult;
 };

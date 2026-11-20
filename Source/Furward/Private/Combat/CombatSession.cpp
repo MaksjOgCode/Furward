@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подготавливает бой, принимает атаки и заменяет погибшего противника в текущей арене.
+ * @brief Подготавливает бой, принимает атаки, фиксирует исход и заменяет противника в текущей арене.
  */
 
 #include "Combat/CombatSession.h"
@@ -133,8 +133,7 @@ void UCombatSession::HandleEnvironmentShown()
     {
         if (ACombatEnemy* SpawnedEnemy = SpawnEnemy(*World, *FoundArena, *InitialEnemy))
         {
-            Enemy = SpawnedEnemy;
-            SpawnedEnemy->GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+            RegisterEnemy(*SpawnedEnemy, *InitialEnemy);
         }
     }
 
@@ -234,6 +233,15 @@ ACombatEnemy* UCombatSession::SpawnEnemy(UWorld& World, const ACombatArena& Aren
 	return SpawnedEnemy;
 }
 
+void UCombatSession::RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnemyDefinition& Definition)
+{
+	Enemy = &SpawnedEnemy;
+	EncounterID = FGuid::NewGuid();
+	EnemyDefinitionID = Definition.GetPrimaryAssetId();
+	EncounterResult.Reset();
+	SpawnedEnemy.GetAttributes().OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
+}
+
 void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
 	// Сохраняем класс героя до появления арены. Outer в логе позволяет связать сессию с её GameMode.
 	HeroClass = InHeroClass;
@@ -288,7 +296,8 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 	ACombatEnemy* PreviousEnemy = Enemy.Get();
 	ACombatArena* Arena = ActiveArena.Get();
 	const ACombatHero* CurrentHero = Hero.Get();
-	if (Phase != ECombatPhase::ChangingEnemy || !PreviousEnemy || !PreviousEnemy->GetAttributes().IsDead() ||
+	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet() ||
+		!PreviousEnemy || !PreviousEnemy->GetAttributes().IsDead() ||
 		!Arena || !CurrentHero || CurrentHero->GetAttributes().IsDead() ||
 		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
 	{
@@ -318,9 +327,8 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 	}
 	// Destroy удаляет актора из мира, а его UObject и компоненты освобождает сборщик мусора.
 	PreviousAttributes.OnDeath().RemoveAll(this);
-	Enemy = NextEnemy;
-	NextAttributes.OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
 	NextAttributes.SetInitialAttributes(EnemyBase, EnemyBase.MaxHealth);
+	RegisterEnemy(*NextEnemy, Definition);
 
 	UE_LOG(LogCombatSession, Display, TEXT("Next enemy prepared: %s; HP: %.2f/%.2f"),
 		*NextEnemy->GetName(), NextAttributes.GetCurrentHealth(), NextAttributes.GetMaxHealth());
@@ -388,7 +396,7 @@ float UCombatSession::ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, flo
 void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 {
 	ACombatEnemy* CurrentEnemy = Enemy.Get();
-	if (Phase != ECombatPhase::Fighting || !CurrentEnemy ||
+	if (Phase != ECombatPhase::Fighting || EncounterResult.IsSet() || !CurrentEnemy ||
 		&CurrentEnemy->GetAttributes() != &Source || !Source.IsDead())
 	{
 		return;
@@ -397,8 +405,13 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	// Сначала закрываем приём атак, пока актор и его модель остаются в постоянном уровне.
 	Phase = ECombatPhase::ChangingEnemy;
 	CurrentEnemy->DisableClickAreas();
+
+	// Фиксируем исход по идентификатору столкновения и типу контента. Актор может быть удалён при замене.
+	EncounterResult = FCombatEncounterResult{EncounterID, EnemyDefinitionID};
 	UE_LOG(LogCombatSession, Display, TEXT("Combat enemy defeated: %s"), *CurrentEnemy->GetName());
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: ChangingEnemy"));
+	UE_LOG(LogCombatSession, Display, TEXT("Combat encounter result recorded: %s; Enemy definition: %s"),
+		*EncounterID.ToString(EGuidFormats::DigitsWithHyphens), *EnemyDefinitionID.ToString());
 }
 
 bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
@@ -446,6 +459,9 @@ void UCombatSession::Shutdown() {
 
 	Hero.Reset();
 	Enemy.Reset();
+	EncounterID.Invalidate();
+	EnemyDefinitionID = FPrimaryAssetId();
+	EncounterResult.Reset();
 	InitialEnemy = nullptr;
 	ActiveArena.Reset();
 
