@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды продолжения, выхода и эвакуации.
+ * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды продолжения, входа в фарм и выхода.
  */
 
 #pragma once
@@ -42,7 +42,7 @@ private:
 	/** @brief Читает состояние участников после уведомления и обновляет текст и полосы. */
 	void RefreshHealth();
 
-	/** @brief Отображает активный этап, зачистку, босса и возможность продолжить. */
+	/** @brief Выбирает панель режима и обновляет активный этап и доступные действия. */
 	void RefreshProgression();
 
 	/** @brief Показывает доступную команду, ожидание или возможность повтора перехода. */
@@ -76,6 +76,10 @@ private:
 	/** @brief Запрашивает эвакуацию через общий путь сохранения перед выходом. */
 	UFUNCTION()
 	void HandleEvacuate();
+
+	/** @brief Запрашивает фарм и закрывает окно поражения после подготовки нового боя. */
+	UFUNCTION()
+	void HandleEnterFarm();
 
 	/**
 	 * @brief Показывает ожидание записи и блокирует кнопку до результата.
@@ -111,6 +115,14 @@ private:
 	/** @brief Вложенная панель WBP_Combat_Progression в General. */
 	UPROPERTY(Transient)
 	TObjectPtr<UUserWidget> Progression;
+
+	/** @brief Панель WBP_Combat_Farm в General, видимая в режиме Farm. */
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> Farm;
+
+	/** @brief Название активного этапа в панели режима фарма. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> FarmStageText;
 
 	/** @brief Имя активного этапа в панели зачистки. */
 	UPROPERTY(Transient)
@@ -168,13 +180,17 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> DefeatProgressText;
 
-	/** @brief Показывает состояние записи при эвакуации. */
+	/** @brief Показывает состояние эвакуации или ошибку входа в фарм. */
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> EvacuationStatusText;
 
 	/** @brief Начинает эвакуацию или повторяет запись после ошибки. */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> EvacuateButton;
+
+	/** @brief Выбирает фарм, если сессия разрешает вход после поражения. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> EnterFarmButton;
 
 	/** @brief Слабая ссылка на сессию. Её удерживает GameMode. */
 	TWeakObjectPtr<UCombatSession> CombatSession;

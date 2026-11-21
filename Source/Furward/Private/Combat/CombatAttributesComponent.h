@@ -112,7 +112,10 @@ private:
 	 */
 	void SetInitialAttributes(const FCombatBaseAttributes& InBaseAttributes, float InCurrentHealth);
 
-	/** @brief Оповещает подписчиков после записи начальных характеристик. */
+	/** @brief Восстанавливает погибшего участника до максимума перед запуском нового столкновения. */
+	void RestoreFullHealthAfterDefeat();
+
+	/** @brief Оповещает подписчиков после первого задания HP или восстановления из нуля. */
 	void PublishInitialHealth();
 
 	/**
@@ -140,7 +143,7 @@ private:
 	/**
 	 * @brief Остаток здоровья, доступный для просмотра у экземпляра в Details.
 	 *
-	 * Задаётся вместе с базовыми характеристиками и уменьшается через ApplyDamage().
+	 * Задаётся вместе с базовыми характеристиками, уменьшается от урона и восстанавливается по команде сессии.
 	 * До инициализации ноль означает отсутствие данных о здоровье.
 	 */
 	UPROPERTY(VisibleInstanceOnly, Transient, Category = "Combat|Health")

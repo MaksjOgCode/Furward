@@ -54,9 +54,47 @@ bool UCombatSession::RequestNextStage(FName SaveSlot)
 		BeginPIEProgressSave(SaveSlot.IsNone() ? PIEProgressSlot : SaveSlot, EProgressSaveAction::NextStage, NextStageID);
 }
 
+bool UCombatSession::RequestEnterFarm()
+{
+	if (!CanEnterFarm())
+	{
+		return false;
+	}
+
+	const UCombatEnemyDefinition& Definition = *InitialEnemy;
+	FCombatBaseAttributes EnemyBase;
+	if (!ResolvePIEEnemyAttributes(Definition, EnemyBase))
+	{
+		return false;
+	}
+
+	// Спаун и удаление актора могут вызвать Blueprint-события в этом же стеке.
+	Phase = ECombatPhase::Recovering;
+	if (!ReplaceCurrentEnemy(Definition, EnemyBase))
+	{
+		Phase = ECombatPhase::Defeated;
+		return false;
+	}
+
+	Mode = ECombatMode::Farm;
+	DefeatSnapshot.Reset();
+	UE_LOG(LogCombatSession, Display, TEXT("Combat mode: Farm; Phase: Recovering"));
+	UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
+	HeroAttributes.RestoreFullHealthAfterDefeat();
+
+	Phase = ECombatPhase::Preparing;
+	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; Mode: Farm"));
+	EnterStageReady();
+	HeroAttributes.PublishInitialHealth();
+	Enemy->GetAttributes().PublishInitialHealth();
+	ProgressionChanged.Broadcast();
+	return true;
+}
+
 bool UCombatSession::RequestExitCombat(FName SaveSlot)
 {
-	return BeginPIEProgressSave(SaveSlot.IsNone() ? PIEProgressSlot : SaveSlot, EProgressSaveAction::Exit);
+	return Phase != ECombatPhase::Recovering &&
+		BeginPIEProgressSave(SaveSlot.IsNone() ? PIEProgressSlot : SaveSlot, EProgressSaveAction::Exit);
 }
 
 bool UCombatSession::BeginPIEProgressSave(FName Slot, EProgressSaveAction Action, FName NextStageID)
@@ -307,20 +345,28 @@ void UCombatSession::TryContinuePIECombatPreview()
 		return;
 	}
 
-	// Зачитываем победу в профиле до решения о создании следующего противника.
-	UFurwardProfileSubsystem* Profile = GetProfile();
-	if (!Profile || !Profile->TryRecordExpeditionClear(ActiveStageID, EncounterResult.GetValue().EncounterID))
+	bool bBossPending = false;
+	if (Mode == ECombatMode::Expedition)
 	{
-		return;
+		// Зачитываем победу в профиле до решения о создании обычного противника или босса.
+		UFurwardProfileSubsystem* Profile = GetProfile();
+		if (!Profile || !Profile->TryRecordExpeditionClear(ActiveStageID, EncounterResult->EncounterID))
+		{
+			return;
+		}
+
+		const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
+		UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
+			*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
+		ProgressionChanged.Broadcast();
+		QueuePIEProgressAutosave(*Profile);
+		bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
+	}
+	else
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("Farm encounter won: %s"), *ActiveStageID.ToString());
 	}
 
-	const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
-	UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
-		*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
-	ProgressionChanged.Broadcast();
-	QueuePIEProgressAutosave(*Profile);
-
-	const bool bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
 	const UCombatEnemyDefinition* NextDefinition = SelectPIEEnemyDefinition(bBossPending);
 
 	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
@@ -735,9 +781,25 @@ void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
 	UE_LOG( LogCombatSession, Log, TEXT("Initialize: %s; Outer: %s"), *GetName(), *GetOuter()->GetName() );
 }
 
+bool UCombatSession::CanEnterFarm() const
+{
+#if WITH_EDITOR
+	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
+	const UWorld* World = GetOuter()->GetWorld();
+	const ACombatHero* CurrentHero = Hero.Get();
+	return bPIECombatPreview && Phase == ECombatPhase::Defeated && World && !World->IsPaused() &&
+		CurrentHero && CurrentHero->GetAttributes().IsDead() && InitialEnemy && IsValid(Rules) &&
+		Rules->FarmAccess == ECombatFarmAccessRule::AfterAnyDefeat &&
+		Rules->FarmRecovery == ECombatFarmRecoveryRule::RestoreFullHealth;
+#else
+	return false;
+#endif
+}
+
 const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 {
-	if (Phase == ECombatPhase::ChangingEnemy || Phase == ECombatPhase::Defeated || Phase == ECombatPhase::StageCompleted)
+	if (Phase == ECombatPhase::ChangingEnemy || Phase == ECombatPhase::Defeated ||
+		Phase == ECombatPhase::Recovering || Phase == ECombatPhase::StageCompleted)
 	{
 		return nullptr;
 	}
@@ -841,13 +903,24 @@ void UCombatSession::EnterStageReady()
 
 bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, const FCombatBaseAttributes& EnemyBase)
 {
-	ACombatEnemy* PreviousEnemy = Enemy.Get();
-	ACombatArena* Arena = ActiveArena.Get();
+	const ACombatEnemy* PreviousEnemy = Enemy.Get();
 	const ACombatHero* CurrentHero = Hero.Get();
-	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet() || EncounterResult.GetValue().bDefeatedBoss ||
-		!PreviousEnemy || !PreviousEnemy->GetAttributes().IsDead() ||
-		!Arena || !CurrentHero || CurrentHero->GetAttributes().IsDead() ||
-		!IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
+	if (Phase != ECombatPhase::ChangingEnemy || !EncounterResult.IsSet() || EncounterResult->bDefeatedBoss ||
+		!PreviousEnemy || !PreviousEnemy->GetAttributes().IsDead() || !CurrentHero ||
+		CurrentHero->GetAttributes().IsDead() || !ReplaceCurrentEnemy(Definition, EnemyBase))
+	{
+		return false;
+	}
+
+	Enemy->GetAttributes().PublishInitialHealth();
+	return true;
+}
+
+bool UCombatSession::ReplaceCurrentEnemy(const UCombatEnemyDefinition& Definition, const FCombatBaseAttributes& EnemyBase)
+{
+	ACombatEnemy* PreviousEnemy = Enemy.Get();
+	const ACombatArena* Arena = ActiveArena.Get();
+	if (!PreviousEnemy || !Arena || !IsValid(EnvironmentStreaming.Get()) || !EnvironmentStreaming->IsLevelVisible())
 	{
 		return false;
 	}
@@ -859,7 +932,7 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 		return false;
 	}
 
-	// Пока замена не готова, оставляем погибшего актора и даём вызывающему коду повторить операцию.
+	// Проверяем замену до удаления прежней цели, чтобы при сбое сохранить текущее состояние.
 	UCombatAttributesComponent& NextAttributes = NextEnemy->GetAttributes();
 	if (!NextAttributes.CanInitializeAttributes(EnemyBase, EnemyBase.MaxHealth))
 	{
@@ -881,7 +954,6 @@ bool UCombatSession::PrepareNextEnemy(const UCombatEnemyDefinition& Definition, 
 
 	UE_LOG(LogCombatSession, Display, TEXT("Next enemy prepared: %s; HP: %.2f/%.2f"),
 		*NextEnemy->GetName(), NextAttributes.GetCurrentHealth(), NextAttributes.GetMaxHealth());
-	NextAttributes.PublishInitialHealth();
 	return true;
 }
 

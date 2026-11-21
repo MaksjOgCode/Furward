@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Отображает состояние сессии и передаёт контроллеру действия продолжения, выхода и эвакуации.
+ * @brief Отображает состояние сессии и передаёт контроллеру действия продолжения, входа в фарм и выхода.
  */
 
 #include "Combat/CombatRootWidget.h"
@@ -86,14 +86,16 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		}
 	}
 
-	if (!BindDefeatControls() || !BindLeaveControls())
+	Farm = Cast<UUserWidget>(General->GetWidgetFromName(TEXT("Farm")));
+	FarmStageText = Farm ? Cast<UTextBlock>(Farm->GetWidgetFromName(TEXT("FarmStageText"))) : nullptr;
+	if ((Farm && !FarmStageText) || !BindDefeatControls() || !BindLeaveControls())
 	{
 		return false;
 	}
 
 	CombatSession = &Session;
 	HealthListener = Session.OnParticipantHealthChanged().AddUObject(this, &UCombatRootWidget::RefreshHealth);
-	if (Progression)
+	if (Progression || Farm)
 	{
 		ProgressionListener = Session.OnProgressionChanged().AddUObject(this, &UCombatRootWidget::RefreshProgression);
 	}
@@ -128,6 +130,11 @@ bool UCombatRootWidget::BindDefeatControls()
 	}
 
 	EvacuateButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleEvacuate);
+	EnterFarmButton = Cast<UButton>(DefeatWindow->GetWidgetFromName(TEXT("EnterFarmButton")));
+	if (EnterFarmButton)
+	{
+		EnterFarmButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleEnterFarm);
+	}
 	DefeatWindow->SetVisibility(ESlateVisibility::Collapsed);
 	return true;
 }
@@ -157,6 +164,11 @@ void UCombatRootWidget::ShowDefeat()
 	DefeatProgressText->SetVisibility(Progress.RequiredClears > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	EvacuationStatusText->SetText(FText::GetEmpty());
 	EvacuateButton->SetIsEnabled(true);
+	if (EnterFarmButton)
+	{
+		EnterFarmButton->SetVisibility(Session->CanEnterFarm() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		EnterFarmButton->SetIsEnabled(true);
+	}
 	if (LeaveButton)
 	{
 		LeaveButton->SetIsEnabled(false);
@@ -221,7 +233,26 @@ void UCombatRootWidget::HandleConfirmLeave()
 
 void UCombatRootWidget::HandleEvacuate()
 {
-	SubmitExit(*EvacuateButton, *EvacuationStatusText);
+	if (SubmitExit(*EvacuateButton, *EvacuationStatusText) && EnterFarmButton)
+	{
+		EnterFarmButton->SetIsEnabled(false);
+	}
+}
+
+void UCombatRootWidget::HandleEnterFarm()
+{
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (!Controller || !Controller->RequestEnterFarm())
+	{
+		EvacuationStatusText->SetText(LOCTEXT("EnterFarmFailed", "Не удалось начать фарм. Повтори попытку."));
+		return;
+	}
+
+	DefeatWindow->SetVisibility(ESlateVisibility::Collapsed);
+	if (LeaveButton)
+	{
+		LeaveButton->SetIsEnabled(true);
+	}
 }
 
 bool UCombatRootWidget::SubmitExit(UButton& Action, UTextBlock& Status)
@@ -285,6 +316,10 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		NextStageButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleNextStage);
 	}
+	if (EnterFarmButton)
+	{
+		EnterFarmButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleEnterFarm);
+	}
 	DefeatListener.Reset();
 	ExitSaveFailedListener.Reset();
 	HealthListener.Reset();
@@ -310,13 +345,29 @@ void UCombatRootWidget::RefreshHealth()
 void UCombatRootWidget::RefreshProgression()
 {
 	const UCombatSession* Session = CombatSession.Get();
-	if (!Session || !Progression)
+	if (!Session)
 	{
 		return;
 	}
 
 	const FCombatProgressionSnapshot Snapshot = Session->GetProgressionForDisplay();
-	if (Snapshot.StageID.IsNone() || Snapshot.RequiredClears <= 0)
+	const bool bFarmMode = Session->GetMode() == ECombatMode::Farm;
+	if (Farm)
+	{
+		const bool bShowFarm = bFarmMode && !Snapshot.StageID.IsNone();
+		Farm->SetVisibility(bShowFarm ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		if (bShowFarm)
+		{
+			FarmStageText->SetText(FText::Format(LOCTEXT("FarmStage", "Этап {0}"), FText::FromName(Snapshot.StageID)));
+		}
+	}
+
+	if (!Progression)
+	{
+		return;
+	}
+
+	if (bFarmMode || Snapshot.StageID.IsNone() || Snapshot.RequiredClears <= 0)
 	{
 		Progression->SetVisibility(ESlateVisibility::Collapsed);
 		return;

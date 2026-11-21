@@ -51,6 +51,16 @@ bool ACombatPlayerController::RequestNextStage(FName SaveSlot)
 #endif
 }
 
+bool ACombatPlayerController::RequestEnterFarm()
+{
+#if WITH_EDITOR
+	UCombatSession* Session = GetActiveCombatSession();
+	return Session && Session->RequestEnterFarm();
+#else
+	return false;
+#endif
+}
+
 bool ACombatPlayerController::RequestExitCombat(FName SaveSlot)
 {
 #if WITH_EDITOR

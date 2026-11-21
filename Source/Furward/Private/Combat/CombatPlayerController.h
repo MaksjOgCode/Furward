@@ -55,6 +55,10 @@ public:
 	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Stage")
 	bool RequestNextStage(FName SaveSlot);
 
+	/** @brief Передаёт сессии выбор фарма из окна поражения. */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Session")
+	bool RequestEnterFarm();
+
 	/**
 	 * @brief Передаёт сессии подтверждение выхода из пробного боя.
 	 * @param[in] SaveSlot Выделенный слот текущего PIE. None использует открытый слот.
