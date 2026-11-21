@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat с данными сессии и направляет команды выхода и эвакуации в контроллер.
+ * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды продолжения, выхода и эвакуации.
  */
 
 #pragma once
@@ -15,8 +15,9 @@ class UButton;
 class UCombatSession;
 class UProgressBar;
 class UTextBlock;
+enum class ECombatNextStageState : uint8;
 
-/** @brief Обновляет HUD, показывает подтверждение выхода и итоги поражения. */
+/** @brief Обновляет HUD и окна, привязывает команды игрока к контроллеру. */
 UCLASS(Abstract)
 class UCombatRootWidget : public UUserWidget
 {
@@ -41,8 +42,15 @@ private:
 	/** @brief Читает состояние участников после уведомления и обновляет текст и полосы. */
 	void RefreshHealth();
 
-	/** @brief Отображает активный этап, зачистку и состояние босса по данным сессии. */
+	/** @brief Отображает активный этап, зачистку, босса и возможность продолжить. */
 	void RefreshProgression();
+
+	/** @brief Показывает доступную команду, ожидание или возможность повтора перехода. */
+	void RefreshNextStage(ECombatNextStageState State);
+
+	/** @brief Запрашивает продолжение через контроллер с открытым слотом PIE. */
+	UFUNCTION()
+	void HandleNextStage();
 
 	/** @brief Отображает HP противника и зачистку по событию поражения. */
 	void ShowDefeat();
@@ -120,6 +128,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> BossStatusText;
 
+	/** @brief Кнопка перехода к следующему этапу в панели Progression. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> NextStageButton;
+
+	/** @brief Сообщение об ожидании записи или причине повтора. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> NextStageStatusText;
+
 	/** @brief Модальное окно WBP_Combat_Leave в корневом HUD. */
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UUserWidget> LeaveConfirmation;
@@ -166,7 +182,7 @@ private:
 	/** @brief Подписка на изменения здоровья участников в текущей сессии. */
 	FDelegateHandle HealthListener;
 
-	/** @brief Подписка на смену этапа, зачистку и состояние босса. */
+	/** @brief Подписка на данные экспедиции и состояние перехода. */
 	FDelegateHandle ProgressionListener;
 
 	/** @brief Подписка на поражение героя после захвата данных об итогах. */

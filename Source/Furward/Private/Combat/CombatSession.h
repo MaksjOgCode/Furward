@@ -51,16 +51,27 @@ enum class ECombatBossStatus : uint8
 	Defeated
 };
 
-/** @brief Текущий этап, зачистка из профиля и состояние босса для HUD. */
+/** @brief Доступность и результат команды продолжения для HUD экспедиции. */
+enum class ECombatNextStageState : uint8
+{
+	Unavailable,
+	Available,
+	Saving,
+	SaveFailed,
+	StartFailed
+};
+
+/** @brief Этап, зачистка из профиля, состояние босса и доступность продолжения для HUD. */
 struct FCombatProgressionSnapshot
 {
 	FName StageID;
 	int32 ClearedEnemies = 0;
 	int32 RequiredClears = 0;
 	ECombatBossStatus BossStatus = ECombatBossStatus::Locked;
+	ECombatNextStageState NextStageState = ECombatNextStageState::Unavailable;
 };
 
-/** @brief Сообщает HUD о смене этапа, зачистки или состояния босса. */
+/** @brief Сообщает HUD об изменении данных экспедиции или состояния перехода. */
 DECLARE_MULTICAST_DELEGATE(FCombatProgressionChanged);
 
 /** @brief Сообщает HUD о переходе в Defeated после захвата снимка HP противника. */
@@ -131,7 +142,7 @@ public:
 
 	/**
 	 * @brief Принимает команду на следующий этап пробной экспедиции и запрашивает запись прогресса.
-	 * @param[in] SaveSlot Имя выделенного слота текущей проверки PIE.
+	 * @param[in] SaveSlot Выделенный слот PIE. None использует открытый слот.
 	 * @return true, если запрос принят после завершения активного этапа.
 	 * @post До подтверждения актуальной ревизии сессия остаётся в StageCompleted.
 	 */
@@ -183,7 +194,7 @@ public:
 	/** @brief Читает прогресс активного этапа без изменения профиля. Пустой StageID скрывает панель HUD. */
 	FCombatProgressionSnapshot GetProgressionForDisplay() const;
 
-	/** @brief Даёт интерфейсу подписаться на обновление прогресса экспедиции. */
+	/** @brief Даёт интерфейсу подписаться на обновление прогресса и состояния перехода. */
 	FCombatProgressionChanged& OnProgressionChanged() { return ProgressionChanged; }
 
 	/**
@@ -346,8 +357,12 @@ private:
 	/**
 	 * @brief Готовит следующую строку на существующей арене после подтверждения записи.
 	 * @param[in] StageID Имя выбранной строки.
+	 * @return true, если сессия сменила активный этап и запустила подготовку.
 	 */
-	void BeginNextStageOnActiveArena(FName StageID);
+	bool BeginNextStageOnActiveArena(FName StageID);
+
+	/** @brief Публикует состояние записи или ошибку подготовки для панели экспедиции. */
+	void SetNextStageState(ECombatNextStageState State);
 
 	/** @brief Снимает подписку и очищает действие, в том числе при Shutdown(). */
 	void ResetPendingProgressSave();
@@ -366,6 +381,9 @@ private:
 
 	/** @brief Строка, которую сессия подготавливает после записи при продолжении этапов. */
 	FName PendingNextStageID;
+
+	/** @brief Состояние продолжения текущего завершённого этапа для HUD. */
+	ECombatNextStageState NextStageState = ECombatNextStageState::Unavailable;
 
 	/**
 	 * @brief Выбирает описание следующего участника пробной экспедиции по зачистке.

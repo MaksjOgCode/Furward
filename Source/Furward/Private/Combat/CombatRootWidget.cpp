@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Отображает состояние сессии и передаёт контроллеру действия окон выхода и поражения.
+ * @brief Отображает состояние сессии и передаёт контроллеру действия продолжения, выхода и эвакуации.
  */
 
 #include "Combat/CombatRootWidget.h"
@@ -76,6 +76,13 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		if (!StageText || !ExpeditionClearText || !ExpeditionClearBar || !BossStatusText)
 		{
 			return false;
+		}
+
+		NextStageButton = Cast<UButton>(Progression->GetWidgetFromName(TEXT("NextStageButton")));
+		NextStageStatusText = Cast<UTextBlock>(Progression->GetWidgetFromName(TEXT("NextStageStatusText")));
+		if (NextStageButton)
+		{
+			NextStageButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleNextStage);
 		}
 	}
 
@@ -274,6 +281,10 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		EvacuateButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleEvacuate);
 	}
+	if (NextStageButton)
+	{
+		NextStageButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleNextStage);
+	}
 	DefeatListener.Reset();
 	ExitSaveFailedListener.Reset();
 	HealthListener.Reset();
@@ -316,7 +327,54 @@ void UCombatRootWidget::RefreshProgression()
 		FText::AsNumber(Snapshot.ClearedEnemies), FText::AsNumber(Snapshot.RequiredClears)));
 	ExpeditionClearBar->SetPercent(static_cast<float>(Snapshot.ClearedEnemies) / Snapshot.RequiredClears);
 	BossStatusText->SetText(GetBossStatusText(Snapshot.BossStatus));
-	Progression->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Progression->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	RefreshNextStage(Snapshot.NextStageState);
+}
+
+void UCombatRootWidget::RefreshNextStage(ECombatNextStageState State)
+{
+	if (!NextStageButton || !NextStageStatusText)
+	{
+		return;
+	}
+
+	const bool bAvailable = State != ECombatNextStageState::Unavailable;
+	NextStageButton->SetVisibility(bAvailable ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	NextStageButton->SetIsEnabled(bAvailable && State != ECombatNextStageState::Saving);
+
+	FText Message;
+	switch (State)
+	{
+	case ECombatNextStageState::Saving:
+		Message = LOCTEXT("NextStageSaving", "Сохраняем прогресс…");
+		break;
+	case ECombatNextStageState::SaveFailed:
+		Message = LOCTEXT("NextStageSaveFailed", "Не удалось сохранить. Повтори переход.");
+		break;
+	case ECombatNextStageState::StartFailed:
+		Message = LOCTEXT("NextStageStartFailed", "Не удалось начать следующий этап. Повтори переход.");
+		break;
+	default:
+		break;
+	}
+
+	NextStageStatusText->SetText(Message);
+	NextStageStatusText->SetVisibility(Message.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+}
+
+void UCombatRootWidget::HandleNextStage()
+{
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (Controller && Controller->RequestNextStage(NAME_None))
+	{
+		return;
+	}
+
+	if (NextStageStatusText)
+	{
+		NextStageStatusText->SetText(LOCTEXT("NextStageUnavailable", "Переход недоступен. Проверь слот сохранения и настройки этапа."));
+		NextStageStatusText->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

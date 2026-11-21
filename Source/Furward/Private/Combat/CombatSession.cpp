@@ -51,7 +51,7 @@ bool UCombatSession::RequestNextStage(FName SaveSlot)
 
 	FName NextStageID;
 	return FindNextStageOnActiveArena(NextStageID) &&
-		BeginPIEProgressSave(SaveSlot, EProgressSaveAction::NextStage, NextStageID);
+		BeginPIEProgressSave(SaveSlot.IsNone() ? PIEProgressSlot : SaveSlot, EProgressSaveAction::NextStage, NextStageID);
 }
 
 bool UCombatSession::RequestExitCombat(FName SaveSlot)
@@ -97,11 +97,13 @@ bool UCombatSession::BeginPIEProgressSave(FName Slot, EProgressSaveAction Action
 		Phase = ECombatPhase::Leaving;
 		StopPIEEnemyAttacks();
 		UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Leaving; Awaiting save revision: %lld"), Revision);
+		ProgressionChanged.Broadcast();
 	}
 	else
 	{
 		UE_LOG(LogCombatSession, Display, TEXT("Stage transition awaiting save: %s -> %s; Revision: %lld"),
 			*ActiveStageID.ToString(), *NextStageID.ToString(), Revision);
+		SetNextStageState(ECombatNextStageState::Saving);
 	}
 
 	// Сверяем статус сразу на случай уже записанной ревизии или синхронной ошибки запуска записи.
@@ -158,7 +160,12 @@ void UCombatSession::CheckPendingProgressSave()
 	const UFurwardProfileSubsystem* Profile = GetProfile();
 	if (!Save || !Profile)
 	{
+		const bool bNextStage = PendingSaveAction == EProgressSaveAction::NextStage;
 		ResetPendingProgressSave();
+		if (bNextStage)
+		{
+			SetNextStageState(ECombatNextStageState::SaveFailed);
+		}
 		return;
 	}
 
@@ -178,7 +185,11 @@ void UCombatSession::CheckPendingProgressSave()
 		{
 			UE_LOG(LogCombatSession, Display, TEXT("Stage transition save confirmed: %s; Revision: %lld"),
 				*NextStageID.ToString(), Status.LastSavedRevision);
-			BeginNextStageOnActiveArena(NextStageID);
+			if (!BeginNextStageOnActiveArena(NextStageID))
+			{
+				UE_LOG(LogCombatSession, Warning, TEXT("Stage transition could not start: %s"), *NextStageID.ToString());
+				SetNextStageState(ECombatNextStageState::StartFailed);
+			}
 		}
 	}
 	else if (Status.bLatestWriteFailed || (Snapshot.Revision > Status.LatestRequestedRevision &&
@@ -193,6 +204,7 @@ void UCombatSession::CheckPendingProgressSave()
 		else
 		{
 			UE_LOG(LogCombatSession, Warning, TEXT("Stage transition save failed; request the next stage again to retry."));
+			SetNextStageState(ECombatNextStageState::SaveFailed);
 		}
 	}
 }
@@ -220,7 +232,13 @@ void UCombatSession::ResetPendingProgressSave()
 	PendingNextStageID = NAME_None;
 }
 
-void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
+void UCombatSession::SetNextStageState(ECombatNextStageState State)
+{
+	NextStageState = State;
+	ProgressionChanged.Broadcast();
+}
+
+bool UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 {
 	FName NextStageID;
 	const FCombatStageRow* Next = FindNextStageOnActiveArena(NextStageID);
@@ -228,7 +246,7 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 	UWorld* World = Arena ? Arena->GetWorld() : nullptr;
 	if (!Next || NextStageID != StageID || !World || World->IsPaused())
 	{
-		return;
+		return false;
 	}
 
 	if (ACombatEnemy* PreviousEnemy = Enemy.Get())
@@ -236,7 +254,7 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 		UCombatAttributesComponent& Attributes = PreviousEnemy->GetAttributes();
 		if (!PreviousEnemy->Destroy())
 		{
-			return;
+			return false;
 		}
 		Attributes.OnDeath().RemoveAll(this);
 		Attributes.OnHealthChanged().RemoveAll(this);
@@ -248,6 +266,7 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 	EncounterResult.Reset();
 	bCurrentEnemyIsBoss = false;
 
+	NextStageState = ECombatNextStageState::Unavailable;
 	Phase = ECombatPhase::Preparing;
 	ActiveStageID = NextStageID;
 	InitialEnemy = Next->EnemyRoster[0];
@@ -255,6 +274,7 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 	ProgressionChanged.Broadcast();
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; Stage: %s"), *ActiveStageID.ToString());
 	PrepareStageParticipants(*World, *Arena);
+	return true;
 }
 
 UFurwardSaveSubsystem* UCombatSession::GetSaveSubsystem() const
@@ -761,6 +781,12 @@ FCombatProgressionSnapshot UCombatSession::GetProgressionForDisplay() const
 	if (Profile->IsExpeditionStageCompleted(ActiveStageID))
 	{
 		Snapshot.BossStatus = ECombatBossStatus::Defeated;
+#if WITH_EDITOR
+		if (Phase == ECombatPhase::StageCompleted)
+		{
+			Snapshot.NextStageState = NextStageState;
+		}
+#endif
 	}
 	else if (Profile->IsExpeditionClearComplete(ActiveStageID))
 	{
@@ -953,6 +979,11 @@ void UCombatSession::EnterFighting()
 void UCombatSession::EnterStageCompleted()
 {
 	Phase = ECombatPhase::StageCompleted;
+#if WITH_EDITOR
+	FName NextStageID;
+	NextStageState = bPIECombatPreview && FindNextStageOnActiveArena(NextStageID)
+		? ECombatNextStageState::Available : ECombatNextStageState::Unavailable;
+#endif
 	ProgressionChanged.Broadcast();
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: StageCompleted; Stage: %s"), *ActiveStageID.ToString());
 }
