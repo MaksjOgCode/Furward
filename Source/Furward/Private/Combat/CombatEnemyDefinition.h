@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает настройки вида противника, из которых сессия выбирает класс, внешний вид, области клика и множители характеристик.
+ * @brief Описывает настройки вида противника, из которых сессия выбирает класс, внешний вид, области клика, множители характеристик и награды.
  */
 
 #pragma once
@@ -14,6 +14,7 @@
 #include "CombatEnemyDefinition.generated.h"
 
 class ACombatEnemy;
+class UFurwardLootDefinition;
 class UStaticMesh;
 
 /**
@@ -67,7 +68,14 @@ public:
 	/** @brief Возвращает множители, применяемые к ожидаемым характеристикам этапа при спауне. */
 	const FCombatEnemyAttributeMultipliers& GetAttributeMultipliers() const { return AttributeMultipliers; }
 
+	/** @brief Возвращает назначенный набор лута. Пустая ссылка оставляет победу без валютной награды. */
+	UFurwardLootDefinition* GetLootDefinition() const { return LootDefinition.Get(); }
+
 private:
+	/** @brief Ассет лута вида. Обычный мутант использует эту ссылку в экспедиции и фарме. */
+	UPROPERTY(EditAnywhere, Category = "Combat|Rewards")
+	TObjectPtr<UFurwardLootDefinition> LootDefinition;
+
 	/** @brief Относительные HP, урон и броня этого вида. Итоговые значения рассчитывает сессия. */
 	UPROPERTY(EditAnywhere, Category = "Combat|Balance")
 	FCombatEnemyAttributeMultipliers AttributeMultipliers;

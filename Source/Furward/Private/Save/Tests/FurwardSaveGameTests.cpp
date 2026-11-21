@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет запись снимка прогресса в отдельный слот и восстановление в новом профиле.
+ * @brief Проверяет запись баланса валют и прогресса в отдельный слот и восстановление в новом профиле.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -26,6 +26,9 @@ bool FFurwardProfileSaveRoundTripTest::RunTest(const FString& Parameters)
 	const FName PartialStage(TEXT("Stage_02"));
 	constexpr int32 PartialClears = 7;
 	const FGuid BossEncounterID = FGuid::NewGuid();
+	const FGuid FarmEncounterID = FGuid::NewGuid();
+	const FName Scrap(TEXT("Scrap"));
+	const TMap<FName, int64> FarmReward{{Scrap, 5}};
 	UFurwardProfileSubsystem* Original = NewObject<UFurwardProfileSubsystem>(NewObject<UGameInstance>());
 
 	for (int32 Clear = 0; Clear < UFurwardProfileSubsystem::RequiredExpeditionClears; ++Clear)
@@ -40,15 +43,19 @@ bool FFurwardProfileSaveRoundTripTest::RunTest(const FString& Parameters)
 			Original->TryRecordExpeditionClear(PartialStage, FGuid::NewGuid()));
 	}
 
+	TestTrue(TEXT("Record a farm victory and its currency reward"),
+		Original->TryRecordFarmVictory(PartialStage, FarmEncounterID, FarmReward));
+
 	UFurwardSaveGame* SaveGame = CastChecked<UFurwardSaveGame>(
 		UGameplayStatics::CreateSaveGameObject(UFurwardSaveGame::StaticClass()));
 	TestNull(TEXT("An empty save has no versioned snapshot"), SaveGame->GetProfileSnapshot());
 	SaveGame->SetProfileSnapshot(Original->CreateSnapshot());
-	const int64 SavedRevision = UFurwardProfileSubsystem::RequiredExpeditionClears + 1 + PartialClears;
+	const int64 SavedRevision = UFurwardProfileSubsystem::RequiredExpeditionClears + 2 + PartialClears;
 
 	// Меняем профиль после формирования снимка, чтобы проверить, что запись использует прежнюю копию.
 	TestTrue(TEXT("The live profile can receive another victory"),
-		Original->TryRecordExpeditionClear(PartialStage, FGuid::NewGuid()));
+		Original->TryRecordExpeditionClear(PartialStage, FGuid::NewGuid(), FarmReward));
+	TestEqual(TEXT("The live currency balance has advanced"), Original->GetCurrencyBalance(Scrap), int64{10});
 	TestEqual(TEXT("The live profile has a newer revision"), Original->CreateSnapshot().Revision, SavedRevision + 1);
 
 	// Случайное имя отделяет проверку от любых игровых слотов. Очищаем только этот слот.
@@ -92,6 +99,10 @@ bool FFurwardProfileSaveRoundTripTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(TEXT("Load restores the saved revision"), Restored->GetRevision(), SavedRevision);
+	TestEqual(TEXT("Load restores the currency from the snapshot"), Restored->GetCurrencyBalance(Scrap), int64{5});
+	TestFalse(TEXT("The saved farm result cannot pay again"),
+		Restored->TryRecordFarmVictory(PartialStage, FarmEncounterID, FarmReward));
+	TestEqual(TEXT("Farm replay leaves the balance unchanged"), Restored->GetCurrencyBalance(Scrap), int64{5});
 	TestTrue(TEXT("A loaded revision is already confirmed on disk"), Save->GetSaveStatus(OpenedSlot).IsLatestRevisionSaved(SavedRevision));
 	TestTrue(TEXT("Load restores the completed stage"), Restored->IsExpeditionStageCompleted(FinishedStage));
 	TestEqual(TEXT("Load restores ten clears for the completed stage"),

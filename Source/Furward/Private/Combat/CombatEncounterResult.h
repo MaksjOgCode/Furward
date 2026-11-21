@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "Containers/Map.h"
 #include "Misc/Guid.h"
 #include "UObject/PrimaryAssetId.h"
 
@@ -26,6 +27,9 @@ struct FCombatEncounterResult
 
 	/** @brief Признак победы над боссом этапа для отдельной обработки результата. */
 	bool bDefeatedBoss = false;
+
+	/** @brief Копия рассчитанных валют по идентификаторам, которую профиль применяет один раз. */
+	TMap<FName, int64> CurrencyRewards;
 };
 
 /**

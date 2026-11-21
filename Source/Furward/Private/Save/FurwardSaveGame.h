@@ -23,8 +23,8 @@ class UFurwardSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	/** @brief Поддерживаемая версия схемы файла. Ревизия внутри снимка относится к состоянию игрока. */
-	static constexpr int32 CurrentSchemaVersion = 1;
+	/** @brief Версия записи балансов валют и побед фарма. Старые слоты версии 1 доступны для чтения. */
+	static constexpr int32 CurrentSchemaVersion = 2;
 
 	/**
 	 * @brief Заполняет новый объект копией прогресса перед передачей на запись.
@@ -43,7 +43,8 @@ public:
 	 */
 	const FFurwardProfileSnapshot* GetProfileSnapshot() const
 	{
-		return SchemaVersion == CurrentSchemaVersion ? &ProfileSnapshot : nullptr;
+		// В слоте версии 1 отсутствующие поля валют и фарма остаются со значениями по умолчанию.
+		return (SchemaVersion == 1 || SchemaVersion == CurrentSchemaVersion) ? &ProfileSnapshot : nullptr;
 	}
 
 private:

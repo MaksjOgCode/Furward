@@ -26,6 +26,7 @@ class UCombatAttributesComponent;
 class UCombatEnemyDefinition;
 class UCombatRulesDefinition;
 class UFurwardProfileSubsystem;
+class UFurwardLootDefinition;
 class UFurwardSaveSubsystem;
 class UDataTable;
 struct FCombatBaseAttributes;
@@ -125,7 +126,8 @@ enum class ECombatPhase : uint8
  * @brief Координирует сцену и принимает боевые команды на время одного входа в L_Combat.
  *
  * ACombatGameMode создаёт сессию в InitGame(), удерживает её и вызывает Shutdown() перед уходом с карты.
- * Сессия фиксирует исход, управляет таймером и переключает режим боя. Победы пробной экспедиции ставятся в очередь записи. Смена этапа и выход ждут подтверждения актуальной ревизии. Возврат из фарма читает зачистку из профиля.
+ * Сессия фиксирует исход, управляет таймером и переключает режим боя. После победы в PIE профиль
+ * принимает валюты и прогресс. Запись идёт в очередь. Смена этапа и выход ждут актуальной ревизии.
  */
 UCLASS()
 class UCombatSession : public UObject
@@ -338,10 +340,10 @@ private:
 	bool bPIECombatPreview = false;
 
 	/**
-	 * @brief Передаёт профилю победу над обычным противником и подготавливает очередного участника пробной экспедиции.
+	 * @brief Применяет награду обычной победы в экспедиции или фарме и подготавливает следующего противника.
 	 * @pre Пробный бой включён, публикация результата урона завершена.
-	 * @post Победа учитывается по EncounterID и отправляется на автосохранение в выбранный слот.
-	 * При 10/10 сессия подготавливает босса вместо обычного противника.
+	 * @post Профиль применяет исход по EncounterID. При настроенном слоте новая ревизия отправляется на запись.
+	 * В экспедиции при 10/10 сессия подготавливает босса. Фарм продолжает обычные столкновения.
 	 */
 	void TryContinuePIECombatPreview();
 
@@ -563,12 +565,15 @@ private:
 	void RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnemyDefinition& Definition);
 
 	/**
-	 * @brief Принимает смерть текущего противника и формирует результат столкновения.
+	 * @brief Принимает смерть текущего противника и копирует гарантированные валюты в результат.
 	 * @param[in] Source Компонент характеристик, опубликовавший OnDeath после обнуления HP.
 	 * @post Для текущего погибшего врага сессия отключает области клика и сохраняет результат один раз.
 	 * Обычная победа ведёт в ChangingEnemy. После подтверждённой победы над боссом сессия входит в StageCompleted.
 	 */
 	void HandleEnemyDeath(const UCombatAttributesComponent& Source);
+
+	/** @brief Передаёт подтверждённый результат профилю для однократного начисления валют и прогресса. */
+	bool ApplyEncounterResult(UFurwardProfileSubsystem& Profile) const;
 
 	/**
 	 * @brief Останавливает бой после гибели героя и сохраняет здоровье противника для итогов.
@@ -626,6 +631,10 @@ private:
 
 	/** @brief Идентификатор Data Asset текущего противника для результата столкновения. */
 	FPrimaryAssetId EnemyDefinitionID;
+
+	/** @brief Лут текущего вида. При победе сессия копирует результат до удаления актора. */
+	UPROPERTY(Transient)
+	TObjectPtr<UFurwardLootDefinition> EnemyLoot;
 
 	/** @brief Показывает, относится ли текущий экземпляр врага к описанию босса этапа. */
 	bool bCurrentEnemyIsBoss = false;

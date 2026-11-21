@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает зачистку, завершение этапов и создание снимка прогресса профиля.
+ * @brief Описывает начисление валют и учёт побед в профиле с общим снимком для записи.
  */
 
 #pragma once
@@ -13,10 +13,10 @@
 #include "FurwardProfileSubsystem.generated.h"
 
 /**
- * @brief Владеет зачисткой и завершёнными этапами на время работы GameInstance.
+ * @brief Владеет балансом валют, зачисткой и завершёнными этапами на время работы GameInstance.
  *
  * Unreal создаёт экземпляр автоматически. Он хранит значения между сменами карты и боевой сессии.
- * Боевой код передаёт подтверждённый EncounterID и имя строки этапа.
+ * Боевой код передаёт подтверждённый EncounterID, имя строки этапа и рассчитанную награду.
  */
 UCLASS()
 class UFurwardProfileSubsystem : public UGameInstanceSubsystem
@@ -31,10 +31,24 @@ public:
 	 * @brief Учитывает одну победу над обычным противником экспедиции.
 	 * @param[in] StageID Имя строки боевого этапа из DT_Combat_Stages.
 	 * @param[in] EncounterID Уникальный идентификатор завершённого столкновения.
-	 * @return true, если зачистка выросла. Пустые данные, повторная победа и полный счётчик дают false.
-	 * @post При успехе профиль хранит увеличенный счётчик и помнит EncounterID.
+	 * @param[in] CurrencyRewards Рассчитанные положительные суммы по идентификаторам валют.
+	 * @return true, если зачистка и награда применены. При ошибке профиль сохраняет прежнее состояние.
+	 * @post При успехе профиль помнит EncounterID и увеличивает ревизию один раз.
 	 */
-	bool TryRecordExpeditionClear(FName StageID, const FGuid& EncounterID);
+	bool TryRecordExpeditionClear(FName StageID, const FGuid& EncounterID, const TMap<FName, int64>& CurrencyRewards = {});
+
+	/**
+	 * @brief Начисляет валюты за подтверждённую победу в фарме и фиксирует её идентификатор.
+	 * @param[in] StageID Имя этапа, на котором шёл фарм.
+	 * @param[in] EncounterID Уникальный идентификатор завершённого столкновения.
+	 * @param[in] CurrencyRewards Рассчитанные положительные суммы по идентификаторам валют.
+	 * @return true при первом успешном применении результата.
+	 * @post Зачистка и завершение этапов сохраняют свои значения.
+	 */
+	bool TryRecordFarmVictory(FName StageID, const FGuid& EncounterID, const TMap<FName, int64>& CurrencyRewards);
+
+	/** @brief Возвращает баланс валюты по её идентификатору. Новая валюта имеет нулевой баланс. */
+	int64 GetCurrencyBalance(FName CurrencyID) const;
 
 	/**
 	 * @brief Возвращает зачистку выбранного этапа для определения следующего противника.
@@ -54,10 +68,11 @@ public:
 	 * @brief Учитывает победу над боссом после полной зачистки этапа.
 	 * @param[in] StageID Имя строки этапа, на котором побеждён босс.
 	 * @param[in] EncounterID Уникальный идентификатор столкновения с боссом.
-	 * @return true, если этап впервые отмечен завершённым. Неполная зачистка, неверные данные и дубликаты дают false.
+	 * @param[in] CurrencyRewards Рассчитанные положительные суммы по идентификаторам валют.
+	 * @return true, если этап впервые завершён и награда применена.
 	 * @post При успехе профиль хранит завершённый этап и EncounterID. Зачистка остаётся на 10/10.
 	 */
-	bool TryCompleteExpeditionStage(FName StageID, const FGuid& EncounterID);
+	bool TryCompleteExpeditionStage(FName StageID, const FGuid& EncounterID, const TMap<FName, int64>& CurrencyRewards = {});
 
 	/**
 	 * @brief Проверяет, засчитана ли победа над боссом этапа.
@@ -67,30 +82,34 @@ public:
 	bool IsExpeditionStageCompleted(FName StageID) const;
 
 	/**
-	 * @brief Копирует текущий прогресс и его ревизию для запроса сохранения.
+	 * @brief Копирует валюты, прогресс и ревизию для запроса сохранения.
 	 * @return Снимок, который сохраняет значения на момент вызова.
 	 */
 	FFurwardProfileSnapshot CreateSnapshot() const;
 
-	/** @brief Возвращает ревизию прогресса без копирования снимка. Ноль соответствует новому профилю. */
+	/** @brief Возвращает ревизию профиля без копирования снимка. Ноль соответствует новому профилю. */
 	int64 GetRevision() const { return Progress.Revision; }
 
 	/**
 	 * @brief Проверяет и восстанавливает прогресс из загруженного снимка.
 	 * @param[in] Snapshot Данные поддерживаемой версии сохранения.
-	 * @return true, если счётчики, завершённые этапы, идентификаторы и ревизия согласованы.
+	 * @return true, если счётчики, валюты, завершённые этапы, идентификаторы и ревизия согласованы.
 	 * @post При успехе профиль принимает весь снимок. При ошибке профиль сохраняет текущее состояние.
 	 */
 	bool TryRestoreSnapshot(const FFurwardProfileSnapshot& Snapshot);
 
 private:
 	/**
-	 * @brief Проверяет идентификаторы этапа и победы перед изменением профиля.
+	 * @brief Проверяет идентификаторы, повтор результата и возможность начислить весь набор валют.
 	 * @param[in] StageID Имя строки этапа.
 	 * @param[in] EncounterID Идентификатор столкновения.
-	 * @return true, если оба идентификатора заданы и профиль ещё не засчитал столкновение.
+	 * @param[in] CurrencyRewards Суммы, которые должны целиком поместиться в балансах.
+	 * @return true, если результат можно применить без дубликата или переполнения.
 	 */
-	bool CanRecordEncounter(FName StageID, const FGuid& EncounterID) const;
+	bool CanRecordEncounter(FName StageID, const FGuid& EncounterID, const TMap<FName, int64>& CurrencyRewards) const;
+
+	/** @brief После общей проверки начисляет валюты, запоминает столкновение и увеличивает ревизию. */
+	void ApplyVictory(const FGuid& EncounterID, const TMap<FName, int64>& CurrencyRewards);
 
 	/** @brief Текущее состояние профиля. Каждая засчитанная победа увеличивает ревизию на единицу. */
 	FFurwardProfileSnapshot Progress;

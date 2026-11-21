@@ -2,14 +2,15 @@
 
 /**
  * @file
- * @brief Учитывает победы экспедиции и проверяет согласованность загружаемого прогресса.
+ * @brief Учитывает валюты и прогресс в одной операции профиля и проверяет загружаемый снимок.
  */
 
 #include "Profile/FurwardProfileSubsystem.h"
 
-bool UFurwardProfileSubsystem::TryRecordExpeditionClear(FName StageID, const FGuid& EncounterID)
+bool UFurwardProfileSubsystem::TryRecordExpeditionClear(FName StageID, const FGuid& EncounterID,
+	const TMap<FName, int64>& CurrencyRewards)
 {
-	if (!CanRecordEncounter(StageID, EncounterID))
+	if (!CanRecordEncounter(StageID, EncounterID, CurrencyRewards))
 	{
 		return false;
 	}
@@ -21,9 +22,26 @@ bool UFurwardProfileSubsystem::TryRecordExpeditionClear(FName StageID, const FGu
 	}
 
 	++ClearCount;
-	Progress.RecordedEncounterIDs.Add(EncounterID);
-	++Progress.Revision;
+	ApplyVictory(EncounterID, CurrencyRewards);
 	return true;
+}
+
+bool UFurwardProfileSubsystem::TryRecordFarmVictory(FName StageID, const FGuid& EncounterID,
+	const TMap<FName, int64>& CurrencyRewards)
+{
+	if (!CanRecordEncounter(StageID, EncounterID, CurrencyRewards))
+	{
+		return false;
+	}
+
+	++Progress.FarmVictoryCount;
+	ApplyVictory(EncounterID, CurrencyRewards);
+	return true;
+}
+
+int64 UFurwardProfileSubsystem::GetCurrencyBalance(FName CurrencyID) const
+{
+	return Progress.CurrencyBalances.FindRef(CurrencyID);
 }
 
 int32 UFurwardProfileSubsystem::GetExpeditionClearCount(FName StageID) const
@@ -36,17 +54,17 @@ bool UFurwardProfileSubsystem::IsExpeditionClearComplete(FName StageID) const
 	return GetExpeditionClearCount(StageID) >= RequiredExpeditionClears;
 }
 
-bool UFurwardProfileSubsystem::TryCompleteExpeditionStage(FName StageID, const FGuid& EncounterID)
+bool UFurwardProfileSubsystem::TryCompleteExpeditionStage(FName StageID, const FGuid& EncounterID,
+	const TMap<FName, int64>& CurrencyRewards)
 {
-	if (!CanRecordEncounter(StageID, EncounterID) ||
+	if (!CanRecordEncounter(StageID, EncounterID, CurrencyRewards) ||
 		!IsExpeditionClearComplete(StageID) || IsExpeditionStageCompleted(StageID))
 	{
 		return false;
 	}
 
 	Progress.CompletedExpeditionStages.Add(StageID);
-	Progress.RecordedEncounterIDs.Add(EncounterID);
-	++Progress.Revision;
+	ApplyVictory(EncounterID, CurrencyRewards);
 	return true;
 }
 
@@ -73,9 +91,18 @@ bool UFurwardProfileSubsystem::TryRestoreSnapshot(const FFurwardProfileSnapshot&
 		VictoryCount += Stage.Value;
 	}
 
-	if (VictoryCount != Snapshot.Revision || VictoryCount != Snapshot.RecordedEncounterIDs.Num())
+	if (Snapshot.Revision != Snapshot.RecordedEncounterIDs.Num() || VictoryCount > Snapshot.Revision ||
+		Snapshot.FarmVictoryCount != Snapshot.Revision - VictoryCount)
 	{
 		return false;
+	}
+
+	for (const TPair<FName, int64>& Currency : Snapshot.CurrencyBalances)
+	{
+		if (Currency.Key.IsNone() || Currency.Value <= 0)
+		{
+			return false;
+		}
 	}
 
 	for (const FName StageID : Snapshot.CompletedExpeditionStages)
@@ -98,7 +125,31 @@ bool UFurwardProfileSubsystem::TryRestoreSnapshot(const FFurwardProfileSnapshot&
 	return true;
 }
 
-bool UFurwardProfileSubsystem::CanRecordEncounter(FName StageID, const FGuid& EncounterID) const
+bool UFurwardProfileSubsystem::CanRecordEncounter(FName StageID, const FGuid& EncounterID,
+	const TMap<FName, int64>& CurrencyRewards) const
 {
-	return !StageID.IsNone() && EncounterID.IsValid() && !Progress.RecordedEncounterIDs.Contains(EncounterID);
+	if (StageID.IsNone() || !EncounterID.IsValid() || Progress.RecordedEncounterIDs.Contains(EncounterID) ||
+		Progress.Revision == MAX_int64)
+	{
+		return false;
+	}
+
+	for (const TPair<FName, int64>& Currency : CurrencyRewards)
+	{
+		if (Currency.Key.IsNone() || Currency.Value <= 0 || Currency.Value > MAX_int64 - GetCurrencyBalance(Currency.Key))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void UFurwardProfileSubsystem::ApplyVictory(const FGuid& EncounterID, const TMap<FName, int64>& CurrencyRewards)
+{
+	for (const TPair<FName, int64>& Currency : CurrencyRewards)
+	{
+		Progress.CurrencyBalances.FindOrAdd(Currency.Key) += Currency.Value;
+	}
+	Progress.RecordedEncounterIDs.Add(EncounterID);
+	++Progress.Revision;
 }

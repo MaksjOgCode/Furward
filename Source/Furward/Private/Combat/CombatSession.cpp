@@ -22,6 +22,7 @@
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "Profile/FurwardProfileSubsystem.h"
+#include "Rewards/FurwardLootDefinition.h"
 #include "Save/FurwardSaveSubsystem.h"
 #include "TimerManager.h"
 
@@ -337,6 +338,7 @@ bool UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 	ParticipantHealthChanged.Broadcast();
 	EncounterID.Invalidate();
 	EnemyDefinitionID = FPrimaryAssetId();
+	EnemyLoot = nullptr;
 	EncounterResult.Reset();
 	bCurrentEnemyIsBoss = false;
 
@@ -381,27 +383,27 @@ void UCombatSession::TryContinuePIECombatPreview()
 		return;
 	}
 
-	bool bBossPending = false;
-	if (Mode == ECombatMode::Expedition)
+	// Сначала применяем валюты и прогресс. Замена цели запускается после принятия результата.
+	UFurwardProfileSubsystem* Profile = GetProfile();
+	if (!Profile || !ApplyEncounterResult(*Profile))
 	{
-		// Зачитываем победу в профиле до решения о создании обычного противника или босса.
-		UFurwardProfileSubsystem* Profile = GetProfile();
-		if (!Profile || !Profile->TryRecordExpeditionClear(ActiveStageID, EncounterResult->EncounterID))
-		{
-			return;
-		}
+		return;
+	}
 
+	const bool bExpedition = Mode == ECombatMode::Expedition;
+	if (bExpedition)
+	{
 		const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
 		UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
 			*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
 		ProgressionChanged.Broadcast();
-		QueuePIEProgressAutosave(*Profile);
-		bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
 	}
 	else
 	{
 		UE_LOG(LogCombatSession, Display, TEXT("Farm encounter won: %s"), *ActiveStageID.ToString());
 	}
+	QueuePIEProgressAutosave(*Profile);
+	const bool bBossPending = bExpedition && Profile->IsExpeditionClearComplete(ActiveStageID);
 
 	const UCombatEnemyDefinition* NextDefinition = SelectPIEEnemyDefinition(bBossPending);
 
@@ -800,6 +802,7 @@ void UCombatSession::RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnem
 	Enemy = &SpawnedEnemy;
 	EncounterID = FGuid::NewGuid();
 	EnemyDefinitionID = Definition.GetPrimaryAssetId();
+	EnemyLoot = Definition.GetLootDefinition();
 	bCurrentEnemyIsBoss = BossEnemy.Get() == &Definition && InitialEnemy.Get() != &Definition;
 	EncounterResult.Reset();
 	UCombatAttributesComponent& EnemyAttributes = SpawnedEnemy.GetAttributes();
@@ -1132,7 +1135,8 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	CurrentEnemy->DisableClickAreas();
 
 	// Фиксируем исход по идентификатору столкновения и типу контента. Актор может быть удалён при замене.
-	EncounterResult = FCombatEncounterResult{EncounterID, EnemyDefinitionID, bCurrentEnemyIsBoss};
+	EncounterResult = FCombatEncounterResult{EncounterID, EnemyDefinitionID, bCurrentEnemyIsBoss,
+		EnemyLoot ? EnemyLoot->GetGuaranteedCurrencies() : TMap<FName, int64>{}};
 	UE_LOG(LogCombatSession, Display, TEXT("Combat enemy defeated: %s"), *CurrentEnemy->GetName());
 	UE_LOG(LogCombatSession, Display, TEXT("Combat encounter result recorded: %s; Enemy definition: %s"),
 		*EncounterID.ToString(EGuidFormats::DigitsWithHyphens), *EnemyDefinitionID.ToString());
@@ -1145,7 +1149,7 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 	}
 
 	UFurwardProfileSubsystem* Profile = GetProfile();
-	if (!Profile || !Profile->TryCompleteExpeditionStage(ActiveStageID, EncounterResult.GetValue().EncounterID))
+	if (!Profile || !ApplyEncounterResult(*Profile))
 	{
 		UE_LOG(LogCombatSession, Warning, TEXT("Boss result could not complete expedition stage %s."), *ActiveStageID.ToString());
 		return;
@@ -1158,6 +1162,37 @@ void UCombatSession::HandleEnemyDeath(const UCombatAttributesComponent& Source)
 		QueuePIEProgressAutosave(*Profile);
 	}
 #endif
+}
+
+bool UCombatSession::ApplyEncounterResult(UFurwardProfileSubsystem& Profile) const
+{
+	const FCombatEncounterResult& Result = EncounterResult.GetValue();
+	bool bApplied;
+	if (Mode == ECombatMode::Farm)
+	{
+		bApplied = Profile.TryRecordFarmVictory(ActiveStageID, Result.EncounterID, Result.CurrencyRewards);
+	}
+	else if (Result.bDefeatedBoss)
+	{
+		bApplied = Profile.TryCompleteExpeditionStage(ActiveStageID, Result.EncounterID, Result.CurrencyRewards);
+	}
+	else
+	{
+		bApplied = Profile.TryRecordExpeditionClear(ActiveStageID, Result.EncounterID, Result.CurrencyRewards);
+	}
+
+	if (!bApplied)
+	{
+		UE_LOG(LogCombatSession, Warning, TEXT("Combat profile rejected encounter: %s"), *Result.EncounterID.ToString());
+		return false;
+	}
+
+	for (const TPair<FName, int64>& Currency : Result.CurrencyRewards)
+	{
+		UE_LOG(LogCombatSession, Display, TEXT("Combat reward applied: %s +%lld; Balance: %lld"),
+			*Currency.Key.ToString(), Currency.Value, Profile.GetCurrencyBalance(Currency.Key));
+	}
+	return true;
 }
 
 void UCombatSession::HandleHeroDeath(const UCombatAttributesComponent& Source)
@@ -1304,6 +1339,7 @@ void UCombatSession::Shutdown()
 	ParticipantHealthChanged.Clear();
 	EncounterID.Invalidate();
 	EnemyDefinitionID = FPrimaryAssetId();
+	EnemyLoot = nullptr;
 	bCurrentEnemyIsBoss = false;
 	EncounterResult.Reset();
 	DefeatSnapshot.Reset();
