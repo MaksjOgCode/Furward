@@ -112,10 +112,13 @@ private:
 	 */
 	void SetInitialAttributes(const FCombatBaseAttributes& InBaseAttributes, float InCurrentHealth);
 
-	/** @brief Восстанавливает погибшего участника до максимума перед запуском нового столкновения. */
-	void RestoreFullHealthAfterDefeat();
+	/**
+	 * @brief Восстанавливает инициализированного участника до максимума и уведомляет об изменении HP.
+	 * @pre Сессия приняла команду смены режима. Атаки заблокированы до готовности нового боя.
+	 */
+	void RestoreFullHealth();
 
-	/** @brief Оповещает подписчиков после первого задания HP или восстановления из нуля. */
+	/** @brief Оповещает подписчиков после первого задания HP. */
 	void PublishInitialHealth();
 
 	/**

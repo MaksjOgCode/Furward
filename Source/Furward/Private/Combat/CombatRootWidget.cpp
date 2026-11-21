@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Отображает состояние сессии и передаёт контроллеру действия продолжения, входа в фарм и выхода.
+ * @brief Отображает состояние сессии и передаёт контроллеру действия продолжения, смены режима и выхода.
  */
 
 #include "Combat/CombatRootWidget.h"
@@ -88,9 +88,17 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 
 	Farm = Cast<UUserWidget>(General->GetWidgetFromName(TEXT("Farm")));
 	FarmStageText = Farm ? Cast<UTextBlock>(Farm->GetWidgetFromName(TEXT("FarmStageText"))) : nullptr;
-	if ((Farm && !FarmStageText) || !BindDefeatControls() || !BindLeaveControls())
+	ReturnToExpeditionButton = Farm ? Cast<UButton>(Farm->GetWidgetFromName(TEXT("ReturnToExpeditionButton"))) : nullptr;
+	FarmStatusText = Farm ? Cast<UTextBlock>(Farm->GetWidgetFromName(TEXT("FarmStatusText"))) : nullptr;
+	if ((Farm && !FarmStageText) || (ReturnToExpeditionButton && !FarmStatusText) ||
+		!BindDefeatControls() || !BindLeaveControls())
 	{
 		return false;
+	}
+
+	if (ReturnToExpeditionButton)
+	{
+		ReturnToExpeditionButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleReturnToExpedition);
 	}
 
 	CombatSession = &Session;
@@ -172,6 +180,10 @@ void UCombatRootWidget::ShowDefeat()
 	if (LeaveButton)
 	{
 		LeaveButton->SetIsEnabled(false);
+	}
+	if (ReturnToExpeditionButton)
+	{
+		ReturnToExpeditionButton->SetIsEnabled(false);
 	}
 	DefeatWindow->SetVisibility(ESlateVisibility::Visible);
 }
@@ -255,6 +267,18 @@ void UCombatRootWidget::HandleEnterFarm()
 	}
 }
 
+void UCombatRootWidget::HandleReturnToExpedition()
+{
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (Controller && Controller->RequestReturnToExpedition())
+	{
+		return;
+	}
+
+	FarmStatusText->SetText(LOCTEXT("ReturnToExpeditionFailed", "Не удалось продолжить экспедицию. Повтори попытку."));
+	FarmStatusText->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
 bool UCombatRootWidget::SubmitExit(UButton& Action, UTextBlock& Status)
 {
 	Status.SetText(LOCTEXT("LeaveSaving", "Сохраняем прогресс…"));
@@ -320,6 +344,10 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		EnterFarmButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleEnterFarm);
 	}
+	if (ReturnToExpeditionButton)
+	{
+		ReturnToExpeditionButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleReturnToExpedition);
+	}
 	DefeatListener.Reset();
 	ExitSaveFailedListener.Reset();
 	HealthListener.Reset();
@@ -355,10 +383,15 @@ void UCombatRootWidget::RefreshProgression()
 	if (Farm)
 	{
 		const bool bShowFarm = bFarmMode && !Snapshot.StageID.IsNone();
-		Farm->SetVisibility(bShowFarm ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		Farm->SetVisibility(bShowFarm ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
 		if (bShowFarm)
 		{
 			FarmStageText->SetText(FText::Format(LOCTEXT("FarmStage", "Этап {0}"), FText::FromName(Snapshot.StageID)));
+			if (ReturnToExpeditionButton)
+			{
+				ReturnToExpeditionButton->SetIsEnabled(Session->CanReturnToExpedition());
+				FarmStatusText->SetVisibility(ESlateVisibility::Collapsed);
+			}
 		}
 	}
 

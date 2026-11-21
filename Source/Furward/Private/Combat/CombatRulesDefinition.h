@@ -34,11 +34,11 @@ enum class ECombatFarmAccessRule : uint8
 	AfterAnyDefeat UMETA(DisplayName = "After Any Defeat")
 };
 
-/** @brief Определяет восстановление HP при входе в фарм после поражения. */
+/** @brief Определяет восстановление HP при переходе между фармом и экспедицией. */
 UENUM(BlueprintType)
 enum class ECombatFarmRecoveryRule : uint8
 {
-	/** @brief Восстановление для фарма не настроено. */
+	/** @brief Восстановление при смене режима не настроено. */
 	Unspecified,
 	/** @brief Герой сразу возвращается к своему максимальному HP. */
 	RestoreFullHealth UMETA(DisplayName = "Restore Full Health")
@@ -47,7 +47,7 @@ enum class ECombatFarmRecoveryRule : uint8
 /**
  * @brief Хранит настройки боевых правил для DA_Combat_Rules.
  *
- * Автор контента задаёт правила в Data Asset. Сессия читает их при запуске столкновения, настройке таймера и входе в фарм.
+ * Автор контента задаёт правила в Data Asset. Сессия читает их при запуске столкновения, настройке таймера и смене режима.
  */
 UCLASS()
 class UCombatRulesDefinition : public UDataAsset
@@ -74,6 +74,10 @@ public:
 	/** @brief Восстановление героя при принятом переходе к фарму. */
 	UPROPERTY(EditAnywhere, Category = "Combat|Farm")
 	ECombatFarmRecoveryRule FarmRecovery = ECombatFarmRecoveryRule::Unspecified;
+
+	/** @brief Восстановление живого героя при возврате из фарма в экспедицию. */
+	UPROPERTY(EditAnywhere, Category = "Combat|Farm")
+	ECombatFarmRecoveryRule ExpeditionReturnHealth = ECombatFarmRecoveryRule::Unspecified;
 
 #if WITH_EDITORONLY_DATA
 	/** @brief Фактический набор героя для первого входа в пробный бой. */

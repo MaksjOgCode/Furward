@@ -34,10 +34,15 @@ void UCombatAttributesComponent::SetInitialAttributes(const FCombatBaseAttribute
 	CurrentHealth = FMath::Min(InCurrentHealth, BaseAttributes.MaxHealth);
 }
 
-void UCombatAttributesComponent::RestoreFullHealthAfterDefeat()
+void UCombatAttributesComponent::RestoreFullHealth()
 {
-	check(IsDead());
+	check(IsHealthInitialized());
+	const float PreviousHealth = CurrentHealth;
 	CurrentHealth = BaseAttributes.MaxHealth;
+	if (CurrentHealth > PreviousHealth)
+	{
+		HealthChanged.Broadcast(PreviousHealth, CurrentHealth);
+	}
 }
 
 void UCombatAttributesComponent::PublishInitialHealth()

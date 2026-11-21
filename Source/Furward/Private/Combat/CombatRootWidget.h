@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды продолжения, входа в фарм и выхода.
+ * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды продолжения, смены режима и выхода.
  */
 
 #pragma once
@@ -81,6 +81,10 @@ private:
 	UFUNCTION()
 	void HandleEnterFarm();
 
+	/** @brief Предлагает сессии вернуться в экспедицию и показывает ошибку, если подготовка не удалась. */
+	UFUNCTION()
+	void HandleReturnToExpedition();
+
 	/**
 	 * @brief Показывает ожидание записи и блокирует кнопку до результата.
 	 * @param[in,out] Action Кнопка выхода или эвакуации.
@@ -123,6 +127,14 @@ private:
 	/** @brief Название активного этапа в панели режима фарма. */
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> FarmStageText;
+
+	/** @brief Команда возврата из фарма в текущую экспедицию. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> ReturnToExpeditionButton;
+
+	/** @brief Сообщение о неудавшейся подготовке возврата. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> FarmStatusText;
 
 	/** @brief Имя активного этапа в панели зачистки. */
 	UPROPERTY(Transient)

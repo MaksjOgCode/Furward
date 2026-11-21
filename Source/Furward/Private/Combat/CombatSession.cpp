@@ -79,13 +79,48 @@ bool UCombatSession::RequestEnterFarm()
 	Mode = ECombatMode::Farm;
 	DefeatSnapshot.Reset();
 	UE_LOG(LogCombatSession, Display, TEXT("Combat mode: Farm; Phase: Recovering"));
-	UCombatAttributesComponent& HeroAttributes = Hero->GetAttributes();
-	HeroAttributes.RestoreFullHealthAfterDefeat();
+	Hero->GetAttributes().RestoreFullHealth();
 
 	Phase = ECombatPhase::Preparing;
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; Mode: Farm"));
 	EnterStageReady();
-	HeroAttributes.PublishInitialHealth();
+	Enemy->GetAttributes().PublishInitialHealth();
+	ProgressionChanged.Broadcast();
+	return true;
+}
+
+bool UCombatSession::RequestReturnToExpedition()
+{
+	if (!CanReturnToExpedition())
+	{
+		return false;
+	}
+
+	const UFurwardProfileSubsystem* Profile = GetProfile();
+	const bool bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
+	const UCombatEnemyDefinition* Definition = SelectPIEEnemyDefinition(bBossPending);
+	FCombatBaseAttributes EnemyBase;
+	if (!Definition || !ResolvePIEEnemyAttributes(*Definition, EnemyBase))
+	{
+		return false;
+	}
+
+	// До успешной замены старый таймер и состояние столкновения остаются доступны для отката.
+	const ECombatPhase PreviousPhase = Phase;
+	Phase = ECombatPhase::Preparing;
+	if (!ReplaceCurrentEnemy(*Definition, EnemyBase))
+	{
+		Phase = PreviousPhase;
+		return false;
+	}
+
+	StopPIEEnemyAttacks();
+	Hero->GetAttributes().RestoreFullHealth();
+	Mode = ECombatMode::Expedition;
+	UE_LOG(LogCombatSession, Display, TEXT("Combat mode: Expedition; Stage: %s; Clear: %d/%d; Target: %s"),
+		*ActiveStageID.ToString(), Profile->GetExpeditionClearCount(ActiveStageID),
+		UFurwardProfileSubsystem::RequiredExpeditionClears, bBossPending ? TEXT("Boss") : TEXT("Ordinary"));
+	EnterStageReady();
 	Enemy->GetAttributes().PublishInitialHealth();
 	ProgressionChanged.Broadcast();
 	return true;
@@ -94,6 +129,7 @@ bool UCombatSession::RequestEnterFarm()
 bool UCombatSession::RequestExitCombat(FName SaveSlot)
 {
 	return Phase != ECombatPhase::Recovering &&
+		!(Mode == ECombatMode::Farm && Phase == ECombatPhase::Preparing) &&
 		BeginPIEProgressSave(SaveSlot.IsNone() ? PIEProgressSlot : SaveSlot, EProgressSaveAction::Exit);
 }
 
@@ -796,6 +832,20 @@ bool UCombatSession::CanEnterFarm() const
 #endif
 }
 
+bool UCombatSession::CanReturnToExpedition() const
+{
+#if WITH_EDITOR
+	const UCombatRulesDefinition* Rules = PIECombatRules.Get();
+	const UFurwardProfileSubsystem* Profile = GetProfile();
+	return bPIECombatPreview && Mode == ECombatMode::Farm &&
+		(Phase == ECombatPhase::Ready || Phase == ECombatPhase::Fighting) &&
+		IsValid(Rules) && Rules->ExpeditionReturnHealth == ECombatFarmRecoveryRule::RestoreFullHealth &&
+		Profile && !Profile->IsExpeditionStageCompleted(ActiveStageID) && CanUseCurrentEnemy(Enemy.Get());
+#else
+	return false;
+#endif
+}
+
 const ACombatEnemy* UCombatSession::GetActiveEnemy() const
 {
 	if (Phase == ECombatPhase::ChangingEnemy || Phase == ECombatPhase::Defeated ||
@@ -1151,7 +1201,8 @@ bool UCombatSession::SetLeaveConfirmationOpen(bool bOpen)
 		return true;
 	}
 
-	if (bOpen && (bShutdown || Phase == ECombatPhase::Defeated || Phase == ECombatPhase::Leaving))
+	if (bOpen && (bShutdown || Phase == ECombatPhase::Defeated || Phase == ECombatPhase::Leaving ||
+		Phase == ECombatPhase::Recovering || (Mode == ECombatMode::Farm && Phase == ECombatPhase::Preparing)))
 	{
 		return false;
 	}

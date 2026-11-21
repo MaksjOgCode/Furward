@@ -59,6 +59,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Combat|Session")
 	bool RequestEnterFarm();
 
+	/** @brief Передаёт сессии команду возврата из активного фарма в экспедицию. */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Session")
+	bool RequestReturnToExpedition();
+
 	/**
 	 * @brief Передаёт сессии подтверждение выхода из пробного боя.
 	 * @param[in] SaveSlot Выделенный слот текущего PIE. None использует открытый слот.
