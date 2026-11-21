@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Обновляет текст и полосы здоровья по событиям боевой сессии.
+ * @brief Обновляет здоровье и прогресс экспедиции по событиям боевой сессии.
  */
 
 #include "Combat/CombatRootWidget.h"
@@ -29,6 +29,22 @@ void UpdateHealthIndicator(UTextBlock& Text, UProgressBar& Bar, const FCombatPar
 	Text.SetVisibility(ESlateVisibility::HitTestInvisible);
 	Bar.SetVisibility(ESlateVisibility::HitTestInvisible);
 }
+
+/** @brief Подбирает локализованную подпись к состоянию босса. */
+FText GetBossStatusText(ECombatBossStatus Status)
+{
+	switch (Status)
+	{
+	case ECombatBossStatus::Available:
+		return LOCTEXT("BossAvailable", "Босс открыт");
+	case ECombatBossStatus::OnArena:
+		return LOCTEXT("BossOnArena", "Босс на арене");
+	case ECombatBossStatus::Defeated:
+		return LOCTEXT("BossDefeated", "Босс побеждён");
+	default:
+		return LOCTEXT("BossLocked", "Босс закрыт");
+	}
+}
 }
 
 bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
@@ -48,9 +64,24 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		return false;
 	}
 
+	Progression = Cast<UUserWidget>(General->GetWidgetFromName(TEXT("Progression")));
+	if (Progression)
+	{
+		StageText = Cast<UTextBlock>(Progression->GetWidgetFromName(TEXT("StageText")));
+		ExpeditionClearText = Cast<UTextBlock>(Progression->GetWidgetFromName(TEXT("ExpeditionClearText")));
+		ExpeditionClearBar = Cast<UProgressBar>(Progression->GetWidgetFromName(TEXT("ExpeditionClearBar")));
+		BossStatusText = Cast<UTextBlock>(Progression->GetWidgetFromName(TEXT("BossStatusText")));
+		if (!StageText || !ExpeditionClearText || !ExpeditionClearBar || !BossStatusText)
+		{
+			return false;
+		}
+		ProgressionListener = Session.OnProgressionChanged().AddUObject(this, &UCombatRootWidget::RefreshProgression);
+	}
+
 	CombatSession = &Session;
 	HealthListener = Session.OnParticipantHealthChanged().AddUObject(this, &UCombatRootWidget::RefreshHealth);
 	RefreshHealth();
+	RefreshProgression();
 	return true;
 }
 
@@ -59,8 +90,10 @@ void UCombatRootWidget::StopObservingSession()
 	if (UCombatSession* Session = CombatSession.Get())
 	{
 		Session->OnParticipantHealthChanged().Remove(HealthListener);
+		Session->OnProgressionChanged().Remove(ProgressionListener);
 	}
 	HealthListener.Reset();
+	ProgressionListener.Reset();
 	CombatSession.Reset();
 }
 
@@ -77,6 +110,29 @@ void UCombatRootWidget::RefreshHealth()
 		UpdateHealthIndicator(*HeroHealthText, *HeroHealthBar, Session->GetHeroHealthForDisplay(), LOCTEXT("HeroHP", "Герой  {0}/{1}"));
 		UpdateHealthIndicator(*EnemyHealthText, *EnemyHealthBar, Session->GetEnemyHealthForDisplay(), LOCTEXT("EnemyHP", "Противник  {0}/{1}"));
 	}
+}
+
+void UCombatRootWidget::RefreshProgression()
+{
+	const UCombatSession* Session = CombatSession.Get();
+	if (!Session || !Progression)
+	{
+		return;
+	}
+
+	const FCombatProgressionSnapshot Snapshot = Session->GetProgressionForDisplay();
+	if (Snapshot.StageID.IsNone() || Snapshot.RequiredClears <= 0)
+	{
+		Progression->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	StageText->SetText(FText::Format(LOCTEXT("Stage", "Этап {0}"), FText::FromName(Snapshot.StageID)));
+	ExpeditionClearText->SetText(FText::Format(LOCTEXT("ExpeditionClear", "Зачистка {0}/{1}"),
+		FText::AsNumber(Snapshot.ClearedEnemies), FText::AsNumber(Snapshot.RequiredClears)));
+	ExpeditionClearBar->SetPercent(static_cast<float>(Snapshot.ClearedEnemies) / Snapshot.RequiredClears);
+	BossStatusText->SetText(GetBossStatusText(Snapshot.BossStatus));
+	Progression->SetVisibility(ESlateVisibility::HitTestInvisible);
 }
 
 #undef LOCTEXT_NAMESPACE

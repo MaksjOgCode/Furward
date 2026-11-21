@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat и панель здоровья участников с боевой сессией.
+ * @brief Связывает WBP_Root_Combat с данными здоровья и экспедиции боевой сессии.
  */
 
 #pragma once
@@ -15,7 +15,7 @@ class UCombatSession;
 class UProgressBar;
 class UTextBlock;
 
-/** @brief Подписывается на сессию и обновляет здоровье героя и врага в WBP_Combat_General. */
+/** @brief Подписывается на сессию и обновляет здоровье участников и прогресс экспедиции. */
 UCLASS(Abstract)
 class UCombatRootWidget : public UUserWidget
 {
@@ -40,6 +40,9 @@ private:
 	/** @brief Читает состояние участников после уведомления и обновляет текст и полосы. */
 	void RefreshHealth();
 
+	/** @brief Отображает активный этап, зачистку и состояние босса по данным сессии. */
+	void RefreshProgression();
+
 	/** @brief Вложенный WBP_Combat_General с именем General в дереве WBP_Root_Combat. */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UUserWidget> General;
@@ -60,9 +63,32 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UProgressBar> EnemyHealthBar;
 
+	/** @brief Вложенная панель WBP_Combat_Progression в General. */
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> Progression;
+
+	/** @brief Имя активного этапа в панели зачистки. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> StageText;
+
+	/** @brief Числовой счётчик зачистки в панели. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> ExpeditionClearText;
+
+	/** @brief Заполнение полосы зачистки от нуля до порога появления босса. */
+	UPROPERTY(Transient)
+	TObjectPtr<UProgressBar> ExpeditionClearBar;
+
+	/** @brief Доступность, появление или победа над боссом. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> BossStatusText;
+
 	/** @brief Слабая ссылка на сессию. Её удерживает GameMode. */
 	TWeakObjectPtr<UCombatSession> CombatSession;
 
 	/** @brief Подписка на изменения здоровья участников в текущей сессии. */
 	FDelegateHandle HealthListener;
+
+	/** @brief Подписка на смену этапа, зачистку и состояние босса. */
+	FDelegateHandle ProgressionListener;
 };

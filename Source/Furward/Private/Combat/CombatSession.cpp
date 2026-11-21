@@ -251,6 +251,7 @@ void UCombatSession::BeginNextStageOnActiveArena(FName StageID)
 	ActiveStageID = NextStageID;
 	InitialEnemy = Next->EnemyRoster[0];
 	BossEnemy = Next->Boss;
+	ProgressionChanged.Broadcast();
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Preparing; Stage: %s"), *ActiveStageID.ToString());
 	PrepareStageParticipants(*World, *Arena);
 }
@@ -295,6 +296,7 @@ void UCombatSession::TryContinuePIECombatPreview()
 	const int32 ClearedEnemies = Profile->GetExpeditionClearCount(ActiveStageID);
 	UE_LOG(LogCombatSession, Display, TEXT("PIE expedition clear: %s; %d/%d"),
 		*ActiveStageID.ToString(), ClearedEnemies, UFurwardProfileSubsystem::RequiredExpeditionClears);
+	ProgressionChanged.Broadcast();
 	QueuePIEProgressAutosave(*Profile);
 
 	const bool bBossPending = Profile->IsExpeditionClearComplete(ActiveStageID);
@@ -468,6 +470,7 @@ void UCombatSession::RequestInitialStage(UObject* WorldContextObject, const FDat
 	BossEnemy = Stage->Boss;
 	ActiveStageID = StageHandle.RowName;
 	ActiveStageTable = StageHandle.DataTable;
+	ProgressionChanged.Broadcast();
 
 	// Unreal вызовет обработчик, когда добавит подуровень в мир и сделает его видимым.
 	Streaming->OnLevelShown.AddDynamic(this, &UCombatSession::HandleEnvironmentShown);
@@ -699,6 +702,10 @@ void UCombatSession::RegisterEnemy(ACombatEnemy& SpawnedEnemy, const UCombatEnem
 	UCombatAttributesComponent& EnemyAttributes = SpawnedEnemy.GetAttributes();
 	EnemyAttributes.OnDeath().AddUObject(this, &UCombatSession::HandleEnemyDeath);
 	EnemyAttributes.OnHealthChanged().AddUObject(this, &UCombatSession::HandleParticipantHealthChanged);
+	if (bCurrentEnemyIsBoss)
+	{
+		ProgressionChanged.Broadcast();
+	}
 }
 
 void UCombatSession::Initialize(TSubclassOf<ACombatHero> InHeroClass) {
@@ -738,6 +745,27 @@ FCombatParticipantHealth UCombatSession::GetEnemyHealthForDisplay() const
 		return {Attributes.GetCurrentHealth(), Attributes.GetMaxHealth()};
 	}
 	return {};
+}
+
+FCombatProgressionSnapshot UCombatSession::GetProgressionForDisplay() const
+{
+	const UFurwardProfileSubsystem* Profile = GetProfile();
+	if (ActiveStageID.IsNone() || !Profile)
+	{
+		return {};
+	}
+
+	FCombatProgressionSnapshot Snapshot{ActiveStageID, Profile->GetExpeditionClearCount(ActiveStageID),
+		UFurwardProfileSubsystem::RequiredExpeditionClears};
+	if (Profile->IsExpeditionStageCompleted(ActiveStageID))
+	{
+		Snapshot.BossStatus = ECombatBossStatus::Defeated;
+	}
+	else if (Profile->IsExpeditionClearComplete(ActiveStageID))
+	{
+		Snapshot.BossStatus = bCurrentEnemyIsBoss && Enemy.IsValid() ? ECombatBossStatus::OnArena : ECombatBossStatus::Available;
+	}
+	return Snapshot;
 }
 
 void UCombatSession::HandleParticipantHealthChanged(float /*Previous*/, float /*Current*/)
@@ -924,6 +952,7 @@ void UCombatSession::EnterFighting()
 void UCombatSession::EnterStageCompleted()
 {
 	Phase = ECombatPhase::StageCompleted;
+	ProgressionChanged.Broadcast();
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: StageCompleted; Stage: %s"), *ActiveStageID.ToString());
 }
 
@@ -1087,6 +1116,8 @@ void UCombatSession::Shutdown()
 	BossEnemy = nullptr;
 	ActiveStageID = NAME_None;
 	ActiveStageTable = nullptr;
+	ProgressionChanged.Broadcast();
+	ProgressionChanged.Clear();
 	ActiveArena.Reset();
 
 #if WITH_EDITORONLY_DATA

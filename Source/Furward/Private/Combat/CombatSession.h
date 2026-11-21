@@ -42,6 +42,27 @@ struct FCombatParticipantHealth
 /** @brief Сообщает интерфейсу об изменении здоровья или смене доступных участников. */
 DECLARE_MULTICAST_DELEGATE(FCombatParticipantHealthChanged);
 
+/** @brief Состояние босса для отображения в интерфейсе экспедиции. */
+enum class ECombatBossStatus : uint8
+{
+	Locked,
+	Available,
+	OnArena,
+	Defeated
+};
+
+/** @brief Текущий этап, зачистка из профиля и состояние босса для HUD. */
+struct FCombatProgressionSnapshot
+{
+	FName StageID;
+	int32 ClearedEnemies = 0;
+	int32 RequiredClears = 0;
+	ECombatBossStatus BossStatus = ECombatBossStatus::Locked;
+};
+
+/** @brief Сообщает HUD о смене этапа, зачистки или состояния босса. */
+DECLARE_MULTICAST_DELEGATE(FCombatProgressionChanged);
+
 /** @brief Результат проверки луча от курсора, который контроллер вычисляет перед отправкой команды. */
 enum class ECombatClickResult : uint8
 {
@@ -152,6 +173,12 @@ public:
 
 	/** @brief Даёт интерфейсу подписаться на обновления здоровья обоих участников. */
 	FCombatParticipantHealthChanged& OnParticipantHealthChanged() { return ParticipantHealthChanged; }
+
+	/** @brief Читает прогресс активного этапа без изменения профиля. Пустой StageID скрывает панель HUD. */
+	FCombatProgressionSnapshot GetProgressionForDisplay() const;
+
+	/** @brief Даёт интерфейсу подписаться на обновление прогресса экспедиции. */
+	FCombatProgressionChanged& OnProgressionChanged() { return ProgressionChanged; }
 
 	/**
 	 * @brief Инициализирует обоих участников готовыми данными и открывает приём команд.
@@ -532,6 +559,9 @@ private:
 
 	/** @brief Подписчики HUD на время жизни сессии. */
 	FCombatParticipantHealthChanged ParticipantHealthChanged;
+
+	/** @brief Подписчики панели прогресса на время жизни сессии. */
+	FCombatProgressionChanged ProgressionChanged;
 
 	/** @brief Снимок противника при поражении. Shutdown() очищает его вместе с результатом боя. */
 	TOptional<FCombatDefeatSnapshot> DefeatSnapshot;
