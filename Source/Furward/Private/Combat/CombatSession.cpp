@@ -1027,6 +1027,7 @@ void UCombatSession::HandleHeroDeath(const UCombatAttributesComponent& Source)
 	DefeatSnapshot = FCombatDefeatSnapshot{EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth()};
 	UE_LOG(LogCombatSession, Display, TEXT("Combat phase: Defeated; Enemy HP: %.2f/%.2f"),
 		EnemyAttributes.GetCurrentHealth(), EnemyAttributes.GetMaxHealth());
+	DefeatRecorded.Broadcast();
 }
 
 bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
@@ -1047,7 +1048,7 @@ bool UCombatSession::SetLeaveConfirmationOpen(bool bOpen)
 		return true;
 	}
 
-	if (bOpen && (bShutdown || Phase == ECombatPhase::Leaving))
+	if (bOpen && (bShutdown || Phase == ECombatPhase::Defeated || Phase == ECombatPhase::Leaving))
 	{
 		return false;
 	}
@@ -1121,6 +1122,7 @@ void UCombatSession::Shutdown()
 	bShutdown = true;
 	bLeaveConfirmationOpen = false;
 	ExitSaveFailed.Clear();
+	DefeatRecorded.Clear();
 
 	// Постоянный уровень продолжает владеть участниками до завершения мира.
 	Phase = ECombatPhase::Leaving;

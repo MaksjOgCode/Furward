@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat с данными сессии и направляет команды окна выхода в контроллер.
+ * @brief Связывает WBP_Root_Combat с данными сессии и направляет команды выхода и эвакуации в контроллер.
  */
 
 #pragma once
@@ -16,7 +16,7 @@ class UCombatSession;
 class UProgressBar;
 class UTextBlock;
 
-/** @brief Обновляет здоровье и зачистку, открывает подтверждение и показывает итог записи перед выходом. */
+/** @brief Обновляет HUD, показывает подтверждение выхода и итоги поражения. */
 UCLASS(Abstract)
 class UCombatRootWidget : public UUserWidget
 {
@@ -44,6 +44,12 @@ private:
 	/** @brief Отображает активный этап, зачистку и состояние босса по данным сессии. */
 	void RefreshProgression();
 
+	/** @brief Отображает HP противника и зачистку по событию поражения. */
+	void ShowDefeat();
+
+	/** @brief Находит элементы окна поражения и подписывается на кнопку эвакуации. */
+	bool BindDefeatControls();
+
 	/** @brief Проверяет элементы подтверждения выхода и подписывается на нажатия. */
 	bool BindLeaveControls();
 
@@ -59,7 +65,19 @@ private:
 	UFUNCTION()
 	void HandleConfirmLeave();
 
-	/** @brief Показывает ошибку записи и разрешает повторить уже подтверждённый выход. */
+	/** @brief Запрашивает эвакуацию через общий путь сохранения перед выходом. */
+	UFUNCTION()
+	void HandleEvacuate();
+
+	/**
+	 * @brief Показывает ожидание записи и блокирует кнопку до результата.
+	 * @param[in,out] Action Кнопка выхода или эвакуации.
+	 * @param[in,out] Status Строка состояния активного окна.
+	 * @return true, если контроллер принял запрос.
+	 */
+	bool SubmitExit(UButton& Action, UTextBlock& Status);
+
+	/** @brief Показывает ошибку записи в активном окне и разрешает повтор. */
 	void HandleExitSaveFailed();
 
 	/** @brief Вложенный WBP_Combat_General с именем General в дереве WBP_Root_Combat. */
@@ -122,6 +140,26 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> LeaveStatusText;
 
+	/** @brief Вложенный WBP_Combat_Defeat в корневом HUD. */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UUserWidget> DefeatWindow;
+
+	/** @brief Показывает HP противника на момент поражения. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> DefeatEnemyHealthText;
+
+	/** @brief Показывает зачистку текущего этапа на момент поражения. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> DefeatProgressText;
+
+	/** @brief Показывает состояние записи при эвакуации. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> EvacuationStatusText;
+
+	/** @brief Начинает эвакуацию или повторяет запись после ошибки. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> EvacuateButton;
+
 	/** @brief Слабая ссылка на сессию. Её удерживает GameMode. */
 	TWeakObjectPtr<UCombatSession> CombatSession;
 
@@ -131,6 +169,9 @@ private:
 	/** @brief Подписка на смену этапа, зачистку и состояние босса. */
 	FDelegateHandle ProgressionListener;
 
-	/** @brief Подписка окна на ошибку записи перед выходом. */
+	/** @brief Подписка на поражение героя после захвата данных об итогах. */
+	FDelegateHandle DefeatListener;
+
+	/** @brief Подписка на ошибку записи перед выходом или эвакуацией. */
 	FDelegateHandle ExitSaveFailedListener;
 };

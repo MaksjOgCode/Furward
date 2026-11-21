@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Отображает состояние сессии и передаёт контроллеру действия окна подтверждения выхода.
+ * @brief Отображает состояние сессии и передаёт контроллеру действия окон выхода и поражения.
  */
 
 #include "Combat/CombatRootWidget.h"
@@ -79,7 +79,7 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		}
 	}
 
-	if (!BindLeaveControls())
+	if (!BindDefeatControls() || !BindLeaveControls())
 	{
 		return false;
 	}
@@ -90,13 +90,71 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 	{
 		ProgressionListener = Session.OnProgressionChanged().AddUObject(this, &UCombatRootWidget::RefreshProgression);
 	}
-	if (LeaveConfirmation)
+	if (DefeatWindow)
+	{
+		DefeatListener = Session.OnDefeatRecorded().AddUObject(this, &UCombatRootWidget::ShowDefeat);
+	}
+	if (LeaveConfirmation || DefeatWindow)
 	{
 		ExitSaveFailedListener = Session.OnExitSaveFailed().AddUObject(this, &UCombatRootWidget::HandleExitSaveFailed);
 	}
 	RefreshHealth();
 	RefreshProgression();
+	ShowDefeat();
 	return true;
+}
+
+bool UCombatRootWidget::BindDefeatControls()
+{
+	if (!DefeatWindow)
+	{
+		return true;
+	}
+
+	DefeatEnemyHealthText = Cast<UTextBlock>(DefeatWindow->GetWidgetFromName(TEXT("DefeatEnemyHealthText")));
+	DefeatProgressText = Cast<UTextBlock>(DefeatWindow->GetWidgetFromName(TEXT("DefeatProgressText")));
+	EvacuationStatusText = Cast<UTextBlock>(DefeatWindow->GetWidgetFromName(TEXT("EvacuationStatusText")));
+	EvacuateButton = Cast<UButton>(DefeatWindow->GetWidgetFromName(TEXT("EvacuateButton")));
+	if (!DefeatEnemyHealthText || !DefeatProgressText || !EvacuationStatusText || !EvacuateButton)
+	{
+		return false;
+	}
+
+	EvacuateButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleEvacuate);
+	DefeatWindow->SetVisibility(ESlateVisibility::Collapsed);
+	return true;
+}
+
+void UCombatRootWidget::ShowDefeat()
+{
+	const UCombatSession* Session = CombatSession.Get();
+	if (!DefeatWindow || !Session || Session->GetPhase() != ECombatPhase::Defeated)
+	{
+		return;
+	}
+
+	const TOptional<FCombatDefeatSnapshot> Defeat = Session->GetDefeatSnapshot();
+	if (!Defeat.IsSet())
+	{
+		return;
+	}
+
+	DefeatEnemyHealthText->SetText(FText::Format(LOCTEXT("DefeatEnemyHealth", "HP противника: {0}/{1}"),
+		FText::AsNumber(Defeat->EnemyCurrentHealth), FText::AsNumber(Defeat->EnemyMaxHealth)));
+	const FCombatProgressionSnapshot Progress = Session->GetProgressionForDisplay();
+	if (Progress.RequiredClears > 0)
+	{
+		DefeatProgressText->SetText(FText::Format(LOCTEXT("DefeatProgress", "Зачистка: {0}/{1}"),
+			FText::AsNumber(Progress.ClearedEnemies), FText::AsNumber(Progress.RequiredClears)));
+	}
+	DefeatProgressText->SetVisibility(Progress.RequiredClears > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	EvacuationStatusText->SetText(FText::GetEmpty());
+	EvacuateButton->SetIsEnabled(true);
+	if (LeaveButton)
+	{
+		LeaveButton->SetIsEnabled(false);
+	}
+	DefeatWindow->SetVisibility(ESlateVisibility::Visible);
 }
 
 bool UCombatRootWidget::BindLeaveControls()
@@ -119,6 +177,7 @@ bool UCombatRootWidget::BindLeaveControls()
 	ConfirmLeaveButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleConfirmLeave);
 	CancelLeaveButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleCancelLeave);
 	LeaveConfirmation->SetVisibility(ESlateVisibility::Collapsed);
+	LeaveButton->SetIsEnabled(true);
 	return true;
 }
 
@@ -145,23 +204,43 @@ void UCombatRootWidget::HandleCancelLeave()
 
 void UCombatRootWidget::HandleConfirmLeave()
 {
-	LeaveStatusText->SetText(LOCTEXT("LeaveSaving", "Сохраняем прогресс…"));
-	ConfirmLeaveButton->SetIsEnabled(false);
 	CancelLeaveButton->SetIsEnabled(false);
-
-	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
-	if (!Controller || !Controller->RequestExitCombat(NAME_None))
+	if (!SubmitExit(*ConfirmLeaveButton, *LeaveStatusText))
 	{
-		LeaveStatusText->SetText(LOCTEXT("LeaveUnavailable", "Выход недоступен. Проверь слот сохранения."));
-		ConfirmLeaveButton->SetIsEnabled(true);
 		const UCombatSession* Session = CombatSession.Get();
 		CancelLeaveButton->SetIsEnabled(Session && Session->GetPhase() != ECombatPhase::Leaving);
 	}
 }
 
+void UCombatRootWidget::HandleEvacuate()
+{
+	SubmitExit(*EvacuateButton, *EvacuationStatusText);
+}
+
+bool UCombatRootWidget::SubmitExit(UButton& Action, UTextBlock& Status)
+{
+	Status.SetText(LOCTEXT("LeaveSaving", "Сохраняем прогресс…"));
+	Action.SetIsEnabled(false);
+
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (Controller && Controller->RequestExitCombat(NAME_None))
+	{
+		return true;
+	}
+
+	Status.SetText(LOCTEXT("LeaveUnavailable", "Выход недоступен. Проверь слот сохранения."));
+	Action.SetIsEnabled(true);
+	return false;
+}
+
 void UCombatRootWidget::HandleExitSaveFailed()
 {
-	if (LeaveConfirmation->GetVisibility() == ESlateVisibility::Visible)
+	if (DefeatWindow && DefeatWindow->GetVisibility() == ESlateVisibility::Visible)
+	{
+		EvacuationStatusText->SetText(LOCTEXT("EvacuationSaveFailed", "Не удалось сохранить. Повтори эвакуацию."));
+		EvacuateButton->SetIsEnabled(true);
+	}
+	else if (LeaveConfirmation && LeaveConfirmation->GetVisibility() == ESlateVisibility::Visible)
 	{
 		LeaveStatusText->SetText(LOCTEXT("LeaveSaveFailed", "Не удалось сохранить. Нажми «Выйти» для повтора."));
 		ConfirmLeaveButton->SetIsEnabled(true);
@@ -175,6 +254,7 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		Session->OnParticipantHealthChanged().Remove(HealthListener);
 		Session->OnProgressionChanged().Remove(ProgressionListener);
+		Session->OnDefeatRecorded().Remove(DefeatListener);
 		Session->OnExitSaveFailed().Remove(ExitSaveFailedListener);
 		Session->SetLeaveConfirmationOpen(false);
 	}
@@ -190,6 +270,11 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		CancelLeaveButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleCancelLeave);
 	}
+	if (EvacuateButton)
+	{
+		EvacuateButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleEvacuate);
+	}
+	DefeatListener.Reset();
 	ExitSaveFailedListener.Reset();
 	HealthListener.Reset();
 	ProgressionListener.Reset();

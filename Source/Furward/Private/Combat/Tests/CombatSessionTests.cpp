@@ -278,6 +278,15 @@ bool FVerifyCombatClickCommands::Update()
 	Test->TestFalse(TEXT("A living hero has no defeat snapshot"), Session->GetDefeatSnapshot().IsSet());
 	Test->TestEqual(TEXT("Damage before defeat reduces the enemy's current health"),
 		Session->ApplyResolvedDamageToEnemy(AutomaticEnemy, 10.0f), 10.0f);
+	int32 DefeatEvents = 0;
+	const FDelegateHandle DefeatHandle = Session->OnDefeatRecorded().AddLambda([&]()
+	{
+		++DefeatEvents;
+		const TOptional<FCombatDefeatSnapshot> Snapshot = Session->GetDefeatSnapshot();
+		Test->TestTrue(TEXT("Defeat listeners see the finished phase and enemy snapshot"),
+			Session->GetPhase() == ECombatPhase::Defeated && Snapshot.IsSet() &&
+			Snapshot->EnemyCurrentHealth == 75.0f && Snapshot->EnemyMaxHealth == 85.0f);
+	});
 	Test->TestEqual(TEXT("Lethal damage to the hero consumes the remaining health"),
 		HeroAttributes.ApplyDamage(100.0f), 70.0f);
 	Test->TestTrue(TEXT("Hero death stops the fight in Defeated"),
@@ -288,6 +297,11 @@ bool FVerifyCombatClickCommands::Update()
 	Test->TestTrue(TEXT("Defeat hides the enemy from click targeting"), Session->GetActiveEnemy() == nullptr);
 	Test->TestFalse(TEXT("No attack is accepted after defeat"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Hit, AutomaticEnemy));
+	Test->TestFalse(TEXT("Defeat prevents a second exit confirmation from opening"),
+		Session->SetLeaveConfirmationOpen(true));
+	HeroAttributes.ApplyDamage(1.0f);
+	Test->TestEqual(TEXT("Defeat notifies listeners exactly once"), DefeatEvents, 1);
+	Session->OnDefeatRecorded().Remove(DefeatHandle);
 
 	return true;
 }

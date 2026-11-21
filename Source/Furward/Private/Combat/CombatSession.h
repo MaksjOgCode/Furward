@@ -63,6 +63,9 @@ struct FCombatProgressionSnapshot
 /** @brief Сообщает HUD о смене этапа, зачистки или состояния босса. */
 DECLARE_MULTICAST_DELEGATE(FCombatProgressionChanged);
 
+/** @brief Сообщает HUD о переходе в Defeated после захвата снимка HP противника. */
+DECLARE_MULTICAST_DELEGATE(FCombatDefeatRecorded);
+
 /** @brief Сообщает HUD, когда неудачную запись перед выходом можно повторить. */
 DECLARE_MULTICAST_DELEGATE(FCombatExitSaveFailed);
 
@@ -190,6 +193,9 @@ public:
 	 */
 	bool SetLeaveConfirmationOpen(bool bOpen);
 
+	/** @brief Событие поражения. GetDefeatSnapshot() уже возвращает данные для итогов. */
+	FCombatDefeatRecorded& OnDefeatRecorded() { return DefeatRecorded; }
+
 	/** @brief Событие ошибки сохранения, после которого разрешён повтор выхода. */
 	FCombatExitSaveFailed& OnExitSaveFailed() { return ExitSaveFailed; }
 
@@ -275,7 +281,7 @@ private:
 	 * Начинается с Preparing, становится Ready после инициализации характеристик,
 	 * Fighting после первого положительного урона или автоматического старта, ChangingEnemy после смерти
 	 * обычного противника, Defeated после смерти героя, StageCompleted после учёта победы над боссом
-	 * и Leaving после подтверждения выхода или при Shutdown().
+	 * и Leaving после подтверждения выхода, выбора эвакуации или при Shutdown().
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
 
@@ -581,6 +587,9 @@ private:
 
 	/** @brief Подписчики результата неудачной записи во время Leaving. */
 	FCombatExitSaveFailed ExitSaveFailed;
+
+	/** @brief Подписчики события поражения текущей сессии. */
+	FCombatDefeatRecorded DefeatRecorded;
 
 	/** @brief Снимок противника при поражении. Shutdown() очищает его вместе с результатом боя. */
 	TOptional<FCombatDefeatSnapshot> DefeatSnapshot;
