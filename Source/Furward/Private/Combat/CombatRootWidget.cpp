@@ -2,11 +2,13 @@
 
 /**
  * @file
- * @brief Обновляет здоровье и прогресс экспедиции по событиям боевой сессии.
+ * @brief Отображает состояние сессии и передаёт контроллеру действия окна подтверждения выхода.
  */
 
 #include "Combat/CombatRootWidget.h"
+#include "Combat/CombatPlayerController.h"
 #include "Combat/CombatSession.h"
+#include "Components/Button.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 
@@ -75,14 +77,96 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		{
 			return false;
 		}
-		ProgressionListener = Session.OnProgressionChanged().AddUObject(this, &UCombatRootWidget::RefreshProgression);
+	}
+
+	if (!BindLeaveControls())
+	{
+		return false;
 	}
 
 	CombatSession = &Session;
 	HealthListener = Session.OnParticipantHealthChanged().AddUObject(this, &UCombatRootWidget::RefreshHealth);
+	if (Progression)
+	{
+		ProgressionListener = Session.OnProgressionChanged().AddUObject(this, &UCombatRootWidget::RefreshProgression);
+	}
+	if (LeaveConfirmation)
+	{
+		ExitSaveFailedListener = Session.OnExitSaveFailed().AddUObject(this, &UCombatRootWidget::HandleExitSaveFailed);
+	}
 	RefreshHealth();
 	RefreshProgression();
 	return true;
+}
+
+bool UCombatRootWidget::BindLeaveControls()
+{
+	LeaveButton = Cast<UButton>(General->GetWidgetFromName(TEXT("LeaveButton")));
+	if (!LeaveConfirmation)
+	{
+		return !LeaveButton;
+	}
+
+	ConfirmLeaveButton = Cast<UButton>(LeaveConfirmation->GetWidgetFromName(TEXT("ConfirmLeaveButton")));
+	CancelLeaveButton = Cast<UButton>(LeaveConfirmation->GetWidgetFromName(TEXT("CancelLeaveButton")));
+	LeaveStatusText = Cast<UTextBlock>(LeaveConfirmation->GetWidgetFromName(TEXT("LeaveStatusText")));
+	if (!LeaveButton || !ConfirmLeaveButton || !CancelLeaveButton || !LeaveStatusText)
+	{
+		return false;
+	}
+
+	LeaveButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleOpenLeave);
+	ConfirmLeaveButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleConfirmLeave);
+	CancelLeaveButton->OnClicked.AddUniqueDynamic(this, &UCombatRootWidget::HandleCancelLeave);
+	LeaveConfirmation->SetVisibility(ESlateVisibility::Collapsed);
+	return true;
+}
+
+void UCombatRootWidget::HandleOpenLeave()
+{
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (Controller && Controller->SetLeaveConfirmationOpen(true))
+	{
+		LeaveStatusText->SetText(LOCTEXT("LeavePrompt", "Покинуть бой? Зачистка сохранится."));
+		ConfirmLeaveButton->SetIsEnabled(true);
+		CancelLeaveButton->SetIsEnabled(true);
+		LeaveConfirmation->SetVisibility(ESlateVisibility::Visible);
+	}
+}
+
+void UCombatRootWidget::HandleCancelLeave()
+{
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (Controller && Controller->SetLeaveConfirmationOpen(false))
+	{
+		LeaveConfirmation->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+void UCombatRootWidget::HandleConfirmLeave()
+{
+	LeaveStatusText->SetText(LOCTEXT("LeaveSaving", "Сохраняем прогресс…"));
+	ConfirmLeaveButton->SetIsEnabled(false);
+	CancelLeaveButton->SetIsEnabled(false);
+
+	ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>();
+	if (!Controller || !Controller->RequestExitCombat(NAME_None))
+	{
+		LeaveStatusText->SetText(LOCTEXT("LeaveUnavailable", "Выход недоступен. Проверь слот сохранения."));
+		ConfirmLeaveButton->SetIsEnabled(true);
+		const UCombatSession* Session = CombatSession.Get();
+		CancelLeaveButton->SetIsEnabled(Session && Session->GetPhase() != ECombatPhase::Leaving);
+	}
+}
+
+void UCombatRootWidget::HandleExitSaveFailed()
+{
+	if (LeaveConfirmation->GetVisibility() == ESlateVisibility::Visible)
+	{
+		LeaveStatusText->SetText(LOCTEXT("LeaveSaveFailed", "Не удалось сохранить. Нажми «Выйти» для повтора."));
+		ConfirmLeaveButton->SetIsEnabled(true);
+		CancelLeaveButton->SetIsEnabled(false);
+	}
 }
 
 void UCombatRootWidget::StopObservingSession()
@@ -91,7 +175,22 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		Session->OnParticipantHealthChanged().Remove(HealthListener);
 		Session->OnProgressionChanged().Remove(ProgressionListener);
+		Session->OnExitSaveFailed().Remove(ExitSaveFailedListener);
+		Session->SetLeaveConfirmationOpen(false);
 	}
+	if (LeaveButton)
+	{
+		LeaveButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleOpenLeave);
+	}
+	if (ConfirmLeaveButton)
+	{
+		ConfirmLeaveButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleConfirmLeave);
+	}
+	if (CancelLeaveButton)
+	{
+		CancelLeaveButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleCancelLeave);
+	}
+	ExitSaveFailedListener.Reset();
 	HealthListener.Reset();
 	ProgressionListener.Reset();
 	CombatSession.Reset();

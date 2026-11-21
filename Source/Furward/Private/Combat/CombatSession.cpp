@@ -43,7 +43,7 @@ bool UCombatSession::RequestNextStage(FName SaveSlot)
 {
 	const UWorld* World = GetOuter()->GetWorld();
 	const UFurwardProfileSubsystem* Profile = GetProfile();
-	if (!bPIECombatPreview || !World || World->IsPaused() || Phase != ECombatPhase::StageCompleted ||
+	if (!bPIECombatPreview || !World || World->IsPaused() || bLeaveConfirmationOpen || Phase != ECombatPhase::StageCompleted ||
 		!Profile || !Profile->IsExpeditionStageCompleted(ActiveStageID))
 	{
 		return false;
@@ -56,7 +56,7 @@ bool UCombatSession::RequestNextStage(FName SaveSlot)
 
 bool UCombatSession::RequestExitCombat(FName SaveSlot)
 {
-	return BeginPIEProgressSave(SaveSlot, EProgressSaveAction::Exit);
+	return BeginPIEProgressSave(SaveSlot.IsNone() ? PIEProgressSlot : SaveSlot, EProgressSaveAction::Exit);
 }
 
 bool UCombatSession::BeginPIEProgressSave(FName Slot, EProgressSaveAction Action, FName NextStageID)
@@ -184,15 +184,16 @@ void UCombatSession::CheckPendingProgressSave()
 	else if (Status.bLatestWriteFailed || (Snapshot.Revision > Status.LatestRequestedRevision &&
 		!Save->RequestSave(PIEProgressSlot, MoveTemp(Snapshot))))
 	{
+		ResetPendingProgressSave();
 		if (bExit)
 		{
 			UE_LOG(LogCombatSession, Warning, TEXT("Combat exit save failed; request the exit again to retry."));
+			ExitSaveFailed.Broadcast();
 		}
 		else
 		{
 			UE_LOG(LogCombatSession, Warning, TEXT("Stage transition save failed; request the next stage again to retry."));
 		}
-		ResetPendingProgressSave();
 	}
 }
 
@@ -1039,6 +1040,42 @@ bool UCombatSession::CanAttackEnemy(const ACombatEnemy* Target) const
 	return CanUseCurrentEnemy(Target);
 }
 
+bool UCombatSession::SetLeaveConfirmationOpen(bool bOpen)
+{
+	if (bOpen == bLeaveConfirmationOpen)
+	{
+		return true;
+	}
+
+	if (bOpen && (bShutdown || Phase == ECombatPhase::Leaving))
+	{
+		return false;
+	}
+#if WITH_EDITOR
+	if (bOpen && PendingSaveAction != EProgressSaveAction::None)
+	{
+		return false;
+	}
+#endif
+
+	bLeaveConfirmationOpen = bOpen;
+#if WITH_EDITOR
+	if (UWorld* World = GetOuter()->GetWorld())
+	{
+		if (bOpen)
+		{
+			World->GetTimerManager().PauseTimer(PIEEnemyAttackTimer);
+		}
+		else
+		{
+			World->GetTimerManager().UnPauseTimer(PIEEnemyAttackTimer);
+		}
+	}
+#endif
+	UE_LOG(LogCombatSession, Display, TEXT("Combat exit confirmation %s"), bOpen ? TEXT("opened") : TEXT("closed"));
+	return true;
+}
+
 bool UCombatSession::CanUseCurrentEnemy(const ACombatEnemy* Target) const
 {
 	if (!Hero.IsValid() || !ActiveArena.IsValid() ||
@@ -1064,9 +1101,9 @@ bool UCombatSession::CanUseCurrentEnemy(const ACombatEnemy* Target) const
 		return false;
 	}
 
-	// Если игровой мир на паузе или недоступен, команда не проходит проверку.
+	// Приостановка сохраняет фазу и запрещает атаки до закрытия окна или снятия паузы.
 	const UWorld* World = Target->GetWorld();
-	if (!World || World->IsPaused())
+	if (!World || World->IsPaused() || bLeaveConfirmationOpen)
 	{
 		UE_LOG(LogCombatSession, Verbose, TEXT("Combat attack rejected: gameplay input is suspended."));
 		return false;
@@ -1082,6 +1119,8 @@ void UCombatSession::Shutdown()
 		return;
 	}
 	bShutdown = true;
+	bLeaveConfirmationOpen = false;
+	ExitSaveFailed.Clear();
 
 	// Постоянный уровень продолжает владеть участниками до завершения мира.
 	Phase = ECombatPhase::Leaving;

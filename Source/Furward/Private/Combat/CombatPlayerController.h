@@ -57,11 +57,14 @@ public:
 
 	/**
 	 * @brief Передаёт сессии подтверждение выхода из пробного боя.
-	 * @param[in] SaveSlot Выделенный слот текущего прогона PIE.
+	 * @param[in] SaveSlot Выделенный слот текущего PIE. None использует открытый слот.
 	 * @return true, если сессия приняла выход или повтор записи после ошибки.
 	 */
 	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Session")
 	bool RequestExitCombat(FName SaveSlot);
+
+	/** @brief Передаёт сессии открытие или закрытие окна подтверждения. */
+	bool SetLeaveConfirmationOpen(bool bOpen);
 
 	/** @brief Сессия вызывает метод после записи и освобождения боевых ресурсов. */
 	void NotifyCombatExitReady();

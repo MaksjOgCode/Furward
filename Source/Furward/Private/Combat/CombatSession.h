@@ -63,6 +63,9 @@ struct FCombatProgressionSnapshot
 /** @brief Сообщает HUD о смене этапа, зачистки или состояния босса. */
 DECLARE_MULTICAST_DELEGATE(FCombatProgressionChanged);
 
+/** @brief Сообщает HUD, когда неудачную запись перед выходом можно повторить. */
+DECLARE_MULTICAST_DELEGATE(FCombatExitSaveFailed);
+
 /** @brief Результат проверки луча от курсора, который контроллер вычисляет перед отправкой команды. */
 enum class ECombatClickResult : uint8
 {
@@ -133,7 +136,7 @@ public:
 
 	/**
 	 * @brief Принимает подтверждённый выход из пробного боя и переводит сессию в Leaving.
-	 * @param[in] SaveSlot Имя выделенного слота этой проверки PIE.
+	 * @param[in] SaveSlot Имя выделенного слота. None использует открытый слот PIE.
 	 * @return true, если сохранение перед выходом принято или очередь уже ждёт его записи.
 	 * @post Атаки остановлены. После ошибки записи ту же команду можно повторить.
 	 */
@@ -179,6 +182,16 @@ public:
 
 	/** @brief Даёт интерфейсу подписаться на обновление прогресса экспедиции. */
 	FCombatProgressionChanged& OnProgressionChanged() { return ProgressionChanged; }
+
+	/**
+	 * @brief Открывает или закрывает причину приостановки боя от окна подтверждения.
+	 * @param[in] bOpen true при открытии. false возобновляет оставшееся время таймера.
+	 * @return true при принятом состоянии окна.
+	 */
+	bool SetLeaveConfirmationOpen(bool bOpen);
+
+	/** @brief Событие ошибки сохранения, после которого разрешён повтор выхода. */
+	FCombatExitSaveFailed& OnExitSaveFailed() { return ExitSaveFailed; }
 
 	/**
 	 * @brief Инициализирует обоих участников готовыми данными и открывает приём команд.
@@ -562,6 +575,12 @@ private:
 
 	/** @brief Подписчики панели прогресса на время жизни сессии. */
 	FCombatProgressionChanged ProgressionChanged;
+
+	/** @brief Удерживает боевой ввод и таймер, пока открыто окно выхода. */
+	bool bLeaveConfirmationOpen = false;
+
+	/** @brief Подписчики результата неудачной записи во время Leaving. */
+	FCombatExitSaveFailed ExitSaveFailed;
 
 	/** @brief Снимок противника при поражении. Shutdown() очищает его вместе с результатом боя. */
 	TOptional<FCombatDefeatSnapshot> DefeatSnapshot;

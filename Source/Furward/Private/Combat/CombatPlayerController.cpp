@@ -61,6 +61,12 @@ bool ACombatPlayerController::RequestExitCombat(FName SaveSlot)
 #endif
 }
 
+bool ACombatPlayerController::SetLeaveConfirmationOpen(bool bOpen)
+{
+	UCombatSession* Session = GetActiveCombatSession();
+	return Session && Session->SetLeaveConfirmationOpen(bOpen);
+}
+
 void ACombatPlayerController::NotifyCombatExitReady()
 {
 	RemoveCombatWidget();

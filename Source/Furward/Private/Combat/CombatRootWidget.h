@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat с данными здоровья и экспедиции боевой сессии.
+ * @brief Связывает WBP_Root_Combat с данными сессии и направляет команды окна выхода в контроллер.
  */
 
 #pragma once
@@ -11,11 +11,12 @@
 #include "Blueprint/UserWidget.h"
 #include "CombatRootWidget.generated.h"
 
+class UButton;
 class UCombatSession;
 class UProgressBar;
 class UTextBlock;
 
-/** @brief Подписывается на сессию и обновляет здоровье участников и прогресс экспедиции. */
+/** @brief Обновляет здоровье и зачистку, открывает подтверждение и показывает итог записи перед выходом. */
 UCLASS(Abstract)
 class UCombatRootWidget : public UUserWidget
 {
@@ -42,6 +43,24 @@ private:
 
 	/** @brief Отображает активный этап, зачистку и состояние босса по данным сессии. */
 	void RefreshProgression();
+
+	/** @brief Проверяет элементы подтверждения выхода и подписывается на нажатия. */
+	bool BindLeaveControls();
+
+	/** @brief Открывает модальное окно и приостанавливает бой. */
+	UFUNCTION()
+	void HandleOpenLeave();
+
+	/** @brief Снимает приостановку и возвращает к прежнему столкновению. */
+	UFUNCTION()
+	void HandleCancelLeave();
+
+	/** @brief Показывает ожидание и передаёт подтверждение выхода контроллеру. */
+	UFUNCTION()
+	void HandleConfirmLeave();
+
+	/** @brief Показывает ошибку записи и разрешает повторить уже подтверждённый выход. */
+	void HandleExitSaveFailed();
 
 	/** @brief Вложенный WBP_Combat_General с именем General в дереве WBP_Root_Combat. */
 	UPROPERTY(meta = (BindWidget))
@@ -83,6 +102,26 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> BossStatusText;
 
+	/** @brief Модальное окно WBP_Combat_Leave в корневом HUD. */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UUserWidget> LeaveConfirmation;
+
+	/** @brief Кнопка открытия окна в General. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> LeaveButton;
+
+	/** @brief Подтверждение выхода или повтор записи. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> ConfirmLeaveButton;
+
+	/** @brief Закрывает окно и продолжает бой до принятия команды выхода. */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> CancelLeaveButton;
+
+	/** @brief Вопрос, ожидание или причина ошибки записи. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> LeaveStatusText;
+
 	/** @brief Слабая ссылка на сессию. Её удерживает GameMode. */
 	TWeakObjectPtr<UCombatSession> CombatSession;
 
@@ -91,4 +130,7 @@ private:
 
 	/** @brief Подписка на смену этапа, зачистку и состояние босса. */
 	FDelegateHandle ProgressionListener;
+
+	/** @brief Подписка окна на ошибку записи перед выходом. */
+	FDelegateHandle ExitSaveFailedListener;
 };
