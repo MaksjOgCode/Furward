@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Описывает боевой ввод, камеру и команды, которые контроллер передаёт сессии.
+ * @brief Описывает боевой и общий ввод, камеру и команды, которые контроллер передаёт сессии.
  */
 
 #pragma once
@@ -20,6 +20,7 @@ class UCombatSession;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputAction;
 class UInputMappingContext;
+class UUserWidget;
 enum class ECombatClickResult : uint8;
 
 /** @brief Сигнал о завершении боя после записи актуальной ревизии профиля. */
@@ -31,7 +32,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCombatExitReady);
  * @brief Обрабатывает ввод локального игрока на L_Combat.
  *
  * Unreal создаёт BP_Combat_PlayerController по настройкам GameMode. Локальный контроллер создаёт корневой HUD.
- * Контроллер существует в игровом мире до выхода с карты и использует боевой контекст локального игрока.
+ * Контроллер существует в игровом мире до выхода с карты и подключает боевой и общий контексты локального игрока.
  */
 UCLASS()
 class ACombatPlayerController : public APlayerController
@@ -49,7 +50,7 @@ public:
 
 	/**
 	 * @brief Передаёт сессии команду подготовки следующего этапа после записи прогресса.
-	 * @param[in] SaveSlot Выделенный слот PIE. None использует открытый слот.
+	 * @param[in] SaveSlot Выделенный слот. None использует открытый слот.
 	 * @return true, если сессия приняла команду продолжения.
 	 */
 	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Stage")
@@ -65,11 +66,19 @@ public:
 
 	/**
 	 * @brief Передаёт сессии подтверждение выхода из пробного боя.
-	 * @param[in] SaveSlot Выделенный слот текущего PIE. None использует открытый слот.
+	 * @param[in] SaveSlot Имя слота. None использует открытый профилем слот.
 	 * @return true, если сессия приняла выход или повтор записи после ошибки.
 	 */
 	UFUNCTION(Exec, BlueprintCallable, Category = "Combat|Session")
 	bool RequestExitCombat(FName SaveSlot);
+
+	/**
+	 * @brief Передаёт команду слота от клавиши или Blueprint.
+	 * @param[in] SlotIndex Индекс слота с нуля.
+	 * @return true, если сессия приняла команду и способность сработала.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Combat|Input")
+	bool RequestUseAbilitySlot(int32 SlotIndex);
 
 	/** @brief Передаёт сессии открытие или закрытие окна подтверждения. */
 	bool SetLeaveConfirmationOpen(bool bOpen);
@@ -90,17 +99,17 @@ protected:
 	void BeginPlay() override;
 
 	/**
-	 * @brief Подключает IA_Combat_Click и IMC_Combat при настройке ввода контроллера.
+	 * @brief Подключает IMC_Common для паузы и IMC_Combat для кликовой атаки и слотов.
 	 *
 	 * Unreal вызывает метод при инициализации ввода игрока. Если подсистема, компонент или ассет отсутствуют, контроллер пишет предупреждение.
-	 * При успехе в логе появляется Combat input context added.
+	 * Успешное подключение каждого контекста подтверждается отдельной записью в логе.
 	 */
 	void SetupInputComponent() override;
 
 	/**
-	 * @brief Снимает боевой контекст при завершении контроллера.
+	 * @brief Удаляет виджеты и снимает подключённые контексты при завершении контроллера.
 	 * @param[in] EndPlayReason Причина завершения, передаваемая базовому контроллеру.
-	 * @post Контекст снят, если подсистема, в которую его добавили, ещё существует.
+	 * @post Контексты сняты, если подсистема, в которую их добавили, ещё существует.
 	 */
 	void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
@@ -114,6 +123,12 @@ private:
 	/** @brief Отсоединяет виджет от сессии и удаляет его с экрана. */
 	void RemoveCombatWidget();
 
+	/** @brief Обрабатывает начало IA_Pause и переключает окно с разрешения сессии. */
+	void HandlePauseToggle();
+
+	/** @brief Убирает экранный экземпляр паузы и освобождает ссылку контроллера. */
+	void RemovePauseWidget();
+
 	/** @brief Класс WBP_Root_Combat из Class Defaults боевого контроллера. */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|UI")
 	TSubclassOf<UCombatRootWidget> CombatRootWidgetClass;
@@ -122,6 +137,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCombatRootWidget> CombatWidget;
 
+	/** @brief Общий виджет паузы проекта из Class Defaults. */
+	UPROPERTY(EditDefaultsOnly, Category = "Common|UI")
+	TSubclassOf<UUserWidget> PauseWidgetClass;
+
+	/** @brief Экземпляр окна, который существует, пока открыта пауза. */
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> PauseWidget;
+
 	/**
 	 * @brief Преобразует начало IA_Combat_Click в запрос к текущей сессии.
 	 *
@@ -129,6 +152,9 @@ private:
 	 * Для Ignore контроллер пишет результат в лог. Hit и Miss отправляет сессии с проверенным экземпляром цели.
 	 */
 	void HandleCombatClick();
+
+	/** @brief Передаёт в общий обработчик индекс, привязанный к действию Enhanced Input. */
+	void HandleAbilitySlot(int32 SlotIndex);
 
 	/**
 	 * @brief Трассирует луч от курсора по областям выбранного противника.
@@ -154,11 +180,23 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Input")
 	TObjectPtr<UInputAction> CombatClickAction;
 
+	/** @brief Действия слотов в том же порядке, что и слоты героя. Пустой элемент сохраняет индекс. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Input")
+	TArray<TObjectPtr<UInputAction>> CombatAbilityActions;
+
+	/** @brief Общий контекст локального игрока для команд, доступных на разных картах. */
+	UPROPERTY(EditDefaultsOnly, Category = "Common|Input")
+	TObjectPtr<UInputMappingContext> CommonMappingContext;
+
+	/** @brief Действие открытия и закрытия паузы из IMC_Common. */
+	UPROPERTY(EditDefaultsOnly, Category = "Common|Input")
+	TObjectPtr<UInputAction> PauseAction;
+
 	/**
-	 * @brief Слабая ссылка на подсистему, которой контроллер назначил IMC_Combat.
+	 * @brief Слабая ссылка на подсистему, которой контроллер назначил контексты.
 	 *
-	 * Появляется после AddMappingContext() и очищается при снятии контекста в EndPlay().
-	 * Если подсистема уже уничтожена, снимать контекст с неё не требуется.
+	 * Выбирается в SetupInputComponent() и очищается при снятии контекстов в EndPlay().
+	 * Если подсистема уже уничтожена, снимать контексты с неё не требуется.
 	 */
-	TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> CombatInputSubsystem;
+	TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> LocalInputSubsystem;
 };

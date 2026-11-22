@@ -8,6 +8,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Combat/CombatBaseAttributes.h"
 #include "Combat/CombatEncounterResult.h"
 #include "Engine/TimerHandle.h"
 #include "Misc/Optional.h"
@@ -29,7 +30,6 @@ class UFurwardProfileSubsystem;
 class UFurwardLootDefinition;
 class UFurwardSaveSubsystem;
 class UDataTable;
-struct FCombatBaseAttributes;
 struct FDataTableRowHandle;
 struct FCombatStageRow;
 
@@ -40,8 +40,27 @@ struct FCombatParticipantHealth
 	float Maximum = 0.0f;
 };
 
+/** @brief Данные настроенного слота героя для отображения в HUD. */
+struct FCombatAbilitySlotSnapshot
+{
+	/** @brief Название из описания способности. */
+	FText DisplayName;
+
+	/** @brief Оставшееся игровое время, прочитанное из таймера компонента. */
+	float CooldownRemaining = 0.0f;
+
+	/** @brief Сколько боевого времени осталось у эффекта, запущенного из этого слота. */
+	float EffectRemaining = 0.0f;
+
+	/** @brief Сейчас разрешена команда слота. Фактический эффект проверит сама способность. */
+	bool bCanActivate = false;
+};
+
 /** @brief Сообщает интерфейсу об изменении здоровья или смене доступных участников. */
 DECLARE_MULTICAST_DELEGATE(FCombatParticipantHealthChanged);
+
+/** @brief Сообщает HUD о доступном балансе после открытия профиля или начисления валют. */
+DECLARE_MULTICAST_DELEGATE(FCombatCurrencyBalancesChanged);
 
 /** @brief Состояние босса для отображения в интерфейсе экспедиции. */
 enum class ECombatBossStatus : uint8
@@ -59,7 +78,9 @@ enum class ECombatNextStageState : uint8
 	Available,
 	Saving,
 	SaveFailed,
-	StartFailed
+	StartFailed,
+	EnvironmentLoading,
+	EnvironmentFailed
 };
 
 /** @brief Этап, зачистка из профиля, состояние босса и доступность продолжения для HUD. */
@@ -142,6 +163,17 @@ public:
 	 */
 	void Initialize(TSubclassOf<ACombatHero> InHeroClass);
 
+	/**
+	 * @brief Настраивает кликовый урон и ответные удары, сохраняет набор героя до готовности арены.
+	 * @param[in] InRules Ассет с правилами боя, загруженный GameMode.
+	 * @param[in] HeroBase Базовые характеристики героя.
+	 * @param[in] StartingHealth Текущее HP при первом спауне.
+	 * @param[in] OpenedSlot Слот, который GameMode открыл в подсистеме сохранений. None отключает автосохранение.
+	 * @return true, если сессия в Preparing и приняла правила и характеристики.
+	 */
+	bool ConfigureCombatStart(UCombatRulesDefinition* InRules, const FCombatBaseAttributes& HeroBase, float StartingHealth,
+		FName OpenedSlot = NAME_None);
+
 #if WITH_EDITOR
 	/**
 	 * @brief Включает пробный расчёт характеристик и урона, ответные атаки и замену противника по правилам.
@@ -150,12 +182,13 @@ public:
 	 * @pre GameMode проверил тип мира, включение PIE и открыл указанный слот до запроса этапа.
 	 */
 	void EnablePIECombatPreview(UCombatRulesDefinition* InRules, FName OpenedSlot);
+#endif
 
 	/**
-	 * @brief Принимает команду на следующий этап пробной экспедиции и запрашивает запись прогресса.
-	 * @param[in] SaveSlot Выделенный слот PIE. None использует открытый слот.
-	 * @return true, если запрос принят после завершения активного этапа.
-	 * @post До подтверждения актуальной ревизии сессия остаётся в StageCompleted.
+	 * @brief Запрашивает следующий этап после записи или повторяет подготовку окружения активного этапа.
+	 * @param[in] SaveSlot Имя слота. None использует открытый слот.
+	 * @return true, если принята команда продолжения или повтора загрузки.
+	 * @post При смене этапа сессия дожидается актуальной ревизии в StageCompleted.
 	 */
 	bool RequestNextStage(FName SaveSlot);
 
@@ -173,23 +206,21 @@ public:
 
 	/**
 	 * @brief Принимает подтверждённый выход из пробного боя и переводит сессию в Leaving.
-	 * @param[in] SaveSlot Имя выделенного слота. None использует открытый слот PIE.
+	 * @param[in] SaveSlot Имя слота. None использует открытый слот.
 	 * @return true, если сохранение перед выходом принято или очередь уже ждёт его записи.
 	 * @pre Сессия не подготавливает участников при смене режима.
 	 * @post Атаки остановлены. После ошибки записи ту же команду можно повторить.
 	 */
 	bool RequestExitCombat(FName SaveSlot);
-#endif
 
 	/**
 	 * @brief Читает начальный этап и запрашивает подгрузку его окружения.
 	 *
 	 * GameMode вызывает метод в BeginPlay(). Повторный запрос и запрос вне Preparing пропускаются.
-	 * @param[in] WorldContextObject Объект из игрового мира L_Combat.
 	 * @param[in] StageHandle Ссылка на таблицу этапов и имя начальной строки.
-	 * @note Initial combat stage подтверждает выбор строки после принятия запроса. OnLevelShown приходит позже.
+	 * @note OnLevelShown подтверждает видимость окружения после запроса.
 	 */
-	void RequestInitialStage(UObject* WorldContextObject, const FDataTableRowHandle& StageHandle);
+	void RequestInitialStage(const FDataTableRowHandle& StageHandle);
 
 	/**
 	 * @brief Блокирует команды, очищает таймер и подписки участников и запрашивает выгрузку окружения.
@@ -215,6 +246,12 @@ public:
 	/** @brief Даёт интерфейсу подписаться на обновления здоровья обоих участников. */
 	FCombatParticipantHealthChanged& OnParticipantHealthChanged() { return ParticipantHealthChanged; }
 
+	/** @brief Читает баланс выбранной валюты из профиля текущего мира. */
+	int64 GetCurrencyBalanceForDisplay(FName CurrencyID) const;
+
+	/** @brief Даёт HUD подписаться на обновление валют в текущей сессии. */
+	FCombatCurrencyBalancesChanged& OnCurrencyBalancesChanged() { return CurrencyBalancesChanged; }
+
 	/** @brief Читает прогресс активного этапа без изменения профиля. Пустой StageID скрывает панель HUD. */
 	FCombatProgressionSnapshot GetProgressionForDisplay() const;
 
@@ -227,6 +264,22 @@ public:
 	 * @return true при принятом состоянии окна.
 	 */
 	bool SetLeaveConfirmationOpen(bool bOpen);
+
+	/** @brief Приостанавливает или возобновляет боевое время при переключении меню паузы. */
+	bool SetPauseMenuOpen(bool bOpen);
+
+	/**
+	 * @brief Пытается выполнить способность живого героя во время активного столкновения.
+	 * @param[in] SlotIndex Индекс слота с нуля.
+	 * @return true, если способность выполнила эффект.
+	 */
+	bool TryUseAbilitySlot(int32 SlotIndex);
+
+	/** @brief Применяет срабатывание автокликов по текущей цели через штатный расчёт попадания. */
+	void SubmitAutoClick();
+
+	/** @brief Возвращает снимок слота героя по индексу с нуля. Для пустого слота снимка нет. */
+	TOptional<FCombatAbilitySlotSnapshot> GetAbilitySlotForDisplay(int32 SlotIndex) const;
 
 	/** @brief Событие поражения. GetDefeatSnapshot() уже возвращает данные для итогов. */
 	FCombatDefeatRecorded& OnDefeatRecorded() { return DefeatRecorded; }
@@ -266,11 +319,11 @@ public:
 	bool ActivatePreparedEncounter(const FGuid& ExpectedEncounterID, const UCombatRulesDefinition& Rules);
 
 	/**
-	 * @brief Проверяет запрос атаки, который контроллер передаёт после трассировки клика.
+	 * @brief Принимает запрос контроллера после трассировки и рассчитывает урон при попадании.
 	 * @param[in] Result Результат трассировки. Запрос может содержать Hit или Miss.
 	 * @param[in] Target Тот же экземпляр противника, по которому выполнена трассировка.
 	 * @return true при готовой сцене, актуальной цели и активном игровом времени. Иначе false.
-	 * @note В пробном бое PIE результат Hit проходит расчёт и применение урона.
+	 * @note При настроенных правилах Hit применяет урон с учётом брони цели. Miss не меняет HP.
 	 * @see ApplyResolvedDamageToEnemy
 	 */
 	bool TrySubmitClickAttack(ECombatClickResult Result, const ACombatEnemy* Target);
@@ -281,9 +334,15 @@ public:
 	 * @param[in] ResolvedDamage Урон после учёта игровых характеристик и модификаторов.
 	 * @return Фактическая потеря HP. Ноль означает отсутствие изменения.
 	 * @note Первый положительный урон переводит сессию в Fighting до уведомлений о здоровье.
-	 * Смертельный урон переводит сессию в ChangingEnemy после уведомления о здоровье.
+	 * Смертельный урон запускает обработку исхода. При настроенном правиле одновременной гибели исход подводится в конце кадра.
 	 */
 	float ApplyResolvedDamageToEnemy(const ACombatEnemy* Target, float ResolvedDamage);
+
+	/**
+	 * @brief Применяет рассчитанный ответный удар актуального противника по герою.
+	 * @return Фактическая потеря HP. Возвращает ноль при отклонённом ударе.
+	 */
+	float ApplyResolvedDamageToHero(const ACombatEnemy* Attacker, float ResolvedDamage);
 
 	/**
 	 * @brief Даёт вызывающему коду фазу текущей сессии.
@@ -329,6 +388,15 @@ private:
 	 */
 	ECombatPhase Phase = ECombatPhase::Preparing;
 
+	/** @brief Меняет фазу и синхронизирует паузу боевых таймеров. */
+	void SetCombatPhase(ECombatPhase NewPhase);
+
+	/** @brief Синхронизирует таймеры атак, эффектов и кулдаунов с фазой и открытым окном. */
+	void RefreshCombatTime();
+
+	/** @brief Проверяет общее правило допуска для команды и представления слота. */
+	bool CanUseAbilities() const;
+
 	/** @brief Режим столкновений в текущей сессии. Профиль отдельно хранит прогресс экспедиции. */
 	ECombatMode Mode = ECombatMode::Expedition;
 
@@ -338,31 +406,24 @@ private:
 #if WITH_EDITOR
 	/** @brief Разрешение на пробный бой, которое GameMode передаёт при входе в мир PIE. */
 	bool bPIECombatPreview = false;
-
-	/**
-	 * @brief Применяет награду обычной победы в экспедиции или фарме и подготавливает следующего противника.
-	 * @pre Пробный бой включён, публикация результата урона завершена.
-	 * @post Профиль применяет исход по EncounterID. При настроенном слоте новая ревизия отправляется на запись.
-	 * В экспедиции при 10/10 сессия подготавливает босса. Фарм продолжает обычные столкновения.
-	 */
-	void TryContinuePIECombatPreview();
+#endif
 
 	/**
 	 * @brief Передаёт снимок после зачисленной победы в очередь выбранного слота, если он задан.
 	 * @param[in] Profile Профиль с уже обновлённой ревизией.
 	 * @note Подготовка следующего столкновения идёт сразу. Запись подтверждает подсистема сохранений.
 	 */
-	void QueuePIEProgressAutosave(const UFurwardProfileSubsystem& Profile);
+	void QueueProgressAutosave(const UFurwardProfileSubsystem& Profile);
 
 	/** @brief Возвращает подсистему, чья очередь живёт в GameInstance текущего мира. */
 	UFurwardSaveSubsystem* GetSaveSubsystem() const;
 
 	/**
-	 * @brief Читает следующую строку активного этапа для продолжения на загруженной арене.
+	 * @brief Проверяет строку следующего этапа, его окружение и характеристики первого противника.
 	 * @param[out] NextStageID Имя следующей строки при успехе.
-	 * @return Подготовленная строка с тем же окружением либо nullptr.
+	 * @return Проверенная строка либо nullptr.
 	 */
-	const FCombatStageRow* FindNextStageOnActiveArena(FName& NextStageID) const;
+	const FCombatStageRow* FindNextStage(FName& NextStageID) const;
 
 	/** @brief Действие, которое продолжится после записи актуальной ревизии. */
 	enum class EProgressSaveAction : uint8
@@ -373,13 +434,13 @@ private:
 	};
 
 	/**
-	 * @brief Связывает действие с пробным слотом и запускает ожидание записи.
-	 * @param[in] Slot Имя слота текущей проверки PIE.
+	 * @brief Связывает действие с открытым слотом и запускает ожидание записи.
+	 * @param[in] Slot Имя слота текущей сессии.
 	 * @param[in] Action Подготовка следующего этапа или подтверждённый выход.
 	 * @param[in] NextStageID Имя следующего этапа, если выбрано продолжение.
 	 * @return true, если действие принято. Подтверждённый выход имеет приоритет над продолжением.
 	 */
-	bool BeginPIEProgressSave(FName Slot, EProgressSaveAction Action, FName NextStageID = NAME_None);
+	bool BeginProgressSave(FName Slot, EProgressSaveAction Action, FName NextStageID = NAME_None);
 
 	/** @brief При результате записи своего слота повторно сверяет актуальную ревизию профиля. */
 	void HandleProgressSaveFinished(FName Slot, int64 WrittenRevision, bool bSuccess);
@@ -391,11 +452,26 @@ private:
 	void FinishCombatExit();
 
 	/**
-	 * @brief Готовит следующую строку на существующей арене после подтверждения записи.
+	 * @brief Готовит следующий этап после записи и меняет окружение, если назначена другая карта.
 	 * @param[in] StageID Имя выбранной строки.
 	 * @return true, если сессия сменила активный этап и запустила подготовку.
 	 */
-	bool BeginNextStageOnActiveArena(FName StageID);
+	bool BeginNextStage(FName StageID);
+
+	/** @brief Удаляет противника предыдущего этапа и сбрасывает данные его столкновения. */
+	bool ClearStageEnemy();
+
+	/** @brief Снимает прежнюю арену и запускает наблюдение за подготовкой окружения активного этапа. */
+	void StartEnvironmentPreparation();
+
+	/** @brief Запрашивает карту после скрытия старой и проверяет состояние асинхронной загрузки. */
+	void UpdateEnvironmentPreparation();
+
+	/** @brief Оставляет Preparing и открывает повтор загрузки в HUD. */
+	void FailEnvironmentPreparation();
+
+	/** @brief Снимает подписку, останавливает наблюдение и запрашивает выгрузку уровня. */
+	void ReleaseEnvironment();
 
 	/** @brief Публикует состояние записи или ошибку подготовки для панели экспедиции. */
 	void SetNextStageState(ECombatNextStageState State);
@@ -409,8 +485,8 @@ private:
 	/** @brief Дескриптор подписки на результаты записи. */
 	FDelegateHandle ProgressSaveListener;
 
-	/** @brief Выделенный слот PIE, открытый при входе или принятый при первой записи. */
-	FName PIEProgressSlot;
+	/** @brief Слот, открытый при входе или принятый при первой записи в пробном PIE. */
+	FName ProgressSlot;
 
 	/** @brief Действие, которое ждёт сохранения актуальной ревизии. */
 	EProgressSaveAction PendingSaveAction = EProgressSaveAction::None;
@@ -422,45 +498,42 @@ private:
 	ECombatNextStageState NextStageState = ECombatNextStageState::Unavailable;
 
 	/**
-	 * @brief Выбирает описание следующего участника пробной экспедиции по зачистке.
+	 * @brief Зачисляет обычную победу в профиль и готовит следующее столкновение по правилам боя.
+	 * @pre Правила загружены, фаза ChangingEnemy, уведомления о смерти завершены.
+	 * @post Профиль применяет результат один раз по EncounterID. При зачистке 10/10 в экспедиции появляется босс.
+	 * @note При заданном слоте снимок отправляется в очередь сохранений.
+	 */
+	void ContinueAfterOrdinaryVictory();
+
+	/**
+	 * @brief Выбирает описание обычного противника или босса по состоянию зачистки.
 	 * @param[in] bBossPending true, если профиль уже достиг порога зачистки.
 	 * @return Обычный противник либо отдельное описание босса. Отсутствующее описание босса даёт nullptr.
 	 */
-	const UCombatEnemyDefinition* SelectPIEEnemyDefinition(bool bBossPending) const;
+	const UCombatEnemyDefinition* SelectEnemyDefinition(bool bBossPending) const;
 
 	/**
-	 * @brief Получает характеристики вида для текущего этапа, включая повторный спаун и босса.
-	 * @param[in] Definition Описание вида, который сессия готовится создать.
-	 * @param[out] EnemyBase Рассчитанные значения при успехе.
-	 * @return true, если этап и описание позволяют подготовить компонент характеристик.
-	 */
-	bool ResolvePIEEnemyAttributes(const UCombatEnemyDefinition& Definition, FCombatBaseAttributes& EnemyBase) const;
-
-	/**
-	 * @brief Запускает повторяемые удары текущего противника, если пробный бой и интервалы настроены.
+	 * @brief Запускает ответные удары по задержке и интервалу из правил боя.
 	 * @pre Сессия вошла в Fighting и проверяет обоих участников перед запуском.
 	 */
-	void StartPIEEnemyAttacks();
+	void StartEnemyAttacks();
 
 	/** @brief Отменяет таймер текущего столкновения и освобождает его дескриптор. */
-	void StopPIEEnemyAttacks();
+	void StopEnemyAttacks();
 
 	/**
 	 * @brief Применяет один ответный удар живого противника по герою.
 	 * @param[in] AttackingEncounterID Идентификатор, переданный таймеру при старте.
 	 * @note Фаза, актуальность столкновения и готовность участников проверяются при каждом ударе.
 	 */
-	void HandlePIEEnemyAttack(FGuid AttackingEncounterID);
+	void HandleEnemyAttack(FGuid AttackingEncounterID);
 
-	/** @brief Дескриптор одного таймера ответных ударов для текущего столкновения PIE. */
-	FTimerHandle PIEEnemyAttackTimer;
-#endif
+	/** @brief Дескриптор таймера ответных ударов текущего столкновения. */
+	FTimerHandle EnemyAttackTimer;
 
-#if WITH_EDITORONLY_DATA
-	/** @brief Загруженные правила, которые сессия удерживает до завершения проверки PIE. */
+	/** @brief Загруженные правила, которые сессия удерживает до Shutdown(). */
 	UPROPERTY(Transient)
-	TObjectPtr<UCombatRulesDefinition> PIECombatRules;
-#endif
+	TObjectPtr<UCombatRulesDefinition> CombatRules;
 
 	/**
 	 * @brief Переводит подготовленное столкновение в активную фазу через общую точку старта.
@@ -480,12 +553,37 @@ private:
 	 */
 	UFurwardProfileSubsystem* GetProfile() const;
 
-	/**
-	 * @brief Проверяет видимость арены, готовность участников, принадлежность цели и состояние паузы.
-	 * @param[in] Target Противник, которого вызывающий код собирается активировать или атаковать.
-	 * @return true, если сцена и оба участника готовы выполнять боевые действия.
-	 */
-	bool CanUseCurrentEnemy(const ACombatEnemy* Target) const;
+	/** @brief Сторона-источник удара для допуска в кадре первой гибели. */
+	enum class ECombatAttackSource : uint8
+	{
+		None,
+		Hero,
+		Enemy
+	};
+
+	/** @brief Проверяет готовность арены, паузу и участников. В кадре гибели допускает удар погибшего источника по живой цели. */
+	bool CanUseCurrentEnemy(const ACombatEnemy* Target, ECombatAttackSource Source = ECombatAttackSource::None) const;
+
+	/** @brief Планирует фиксацию исхода в конце кадра, если это задано в правилах боя. */
+	bool DeferEncounterOutcome();
+
+	/** @brief Разрешает последний удар того же столкновения в кадре первой смерти. */
+	bool IsEncounterOutcomePendingThisFrame() const;
+
+	/** @brief Обрабатывает одну или обе смерти, относящиеся к ожидаемому столкновению. */
+	void ResolveDeferredEncounterOutcome();
+
+	/** @brief Снимает подписку конца кадра и освобождает ожидающий идентификатор. */
+	void ResetDeferredEncounterOutcome();
+
+	/** @brief Сохраняет исход победы для идемпотентного применения к профилю. */
+	void RecordEnemyVictory(const ACombatEnemy& CurrentEnemy);
+
+	/** @brief Завершает обычную победу над одним противником. */
+	void FinalizeEnemyVictory(ACombatEnemy& CurrentEnemy);
+
+	/** @brief Фиксирует поражение и при взаимной гибели учитывает уже подтверждённую победу. */
+	void FinalizeHeroDefeat(const ACombatHero& CurrentHero, ACombatEnemy& CurrentEnemy, bool bCreditVictory);
 
 	/**
 	 * @brief Повторно проверяет фазу, цель, участников и паузу перед боевой операцией.
@@ -504,12 +602,30 @@ private:
 	void HandleEnvironmentShown();
 
 	/**
-	 * @brief Создаёт участников активного этапа на видимой арене и применяет пробные характеристики в PIE.
+	 * @brief Создаёт участников на видимой арене и, когда получены стартовые данные, заполняет их характеристики.
 	 * @param[in,out] World Мир, в постоянном уровне которого создаются участники.
 	 * @param[in] Arena Арена, зарегистрированная в показанном окружении.
 	 * @pre Сессия в Preparing, выбран активный этап.
 	 */
 	void PrepareStageParticipants(UWorld& World, const ACombatArena& Arena);
+
+	/**
+	 * @brief Рассчитывает характеристики противника из ожидаемого баланса строки этапа и множителей вида.
+	 * @param[in] Definition Описание вида, который сессия готовится создать.
+	 * @param[out] EnemyBase Рассчитанные значения при успехе.
+	 * @return true, если этап и описание позволяют подготовить компонент характеристик.
+	 */
+	bool ResolveEnemyAttributes(const UCombatEnemyDefinition& Definition, FCombatBaseAttributes& EnemyBase) const;
+
+	/** @brief Скопированные данные первого спауна героя, полученные до готовности арены. */
+	struct FInitialHeroAttributes
+	{
+		FCombatBaseAttributes Base;
+		float CurrentHealth;
+	};
+
+	/** @brief Появляется после приёма стартового набора. Живой герой при смене этапа сохраняет своё здоровье. */
+	TOptional<FInitialHeroAttributes> InitialHeroAttributes;
 
 	/** @brief Открывает ввод после заполнения характеристик обоих участников. */
 	void EnterStageReady();
@@ -530,6 +646,12 @@ private:
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr <ULevelStreamingDynamic> EnvironmentStreaming = nullptr;
+
+	/** @brief Ссылка на прежнее окружение до его скрытия. Владение остаётся у мира. */
+	TWeakObjectPtr<ULevelStreamingDynamic> RetiringEnvironment;
+
+	/** @brief Наблюдает за состоянием подгрузки только во время подготовки. */
+	FTimerHandle EnvironmentLoadTimer;
 
 	/**
 	 * @brief Слабая ссылка на арену, зарегистрированную по OnLevelShown.
@@ -573,7 +695,7 @@ private:
 	void HandleEnemyDeath(const UCombatAttributesComponent& Source);
 
 	/** @brief Передаёт подтверждённый результат профилю для однократного начисления валют и прогресса. */
-	bool ApplyEncounterResult(UFurwardProfileSubsystem& Profile) const;
+	bool ApplyEncounterResult(UFurwardProfileSubsystem& Profile);
 
 	/**
 	 * @brief Останавливает бой после гибели героя и сохраняет здоровье противника для итогов.
@@ -648,11 +770,28 @@ private:
 	/** @brief Подписчики HUD на время жизни сессии. */
 	FCombatParticipantHealthChanged ParticipantHealthChanged;
 
+	/** @brief Подписчики уведомлений о балансе валют для HUD. */
+	FCombatCurrencyBalancesChanged CurrencyBalancesChanged;
+
 	/** @brief Подписчики панели прогресса на время жизни сессии. */
 	FCombatProgressionChanged ProgressionChanged;
 
-	/** @brief Удерживает боевой ввод и таймер, пока открыто окно выхода. */
-	bool bLeaveConfirmationOpen = false;
+	/** @brief Варианты модальных окон, которые приостанавливают ход боя. */
+	enum class ECombatOverlay : uint8
+	{
+		None,
+		LeaveConfirmation,
+		PauseMenu
+	};
+
+	/** @brief Текущее модальное окно. Сессия допускает одно окно за раз. */
+	ECombatOverlay ActiveOverlay = ECombatOverlay::None;
+
+	/** @brief Режим и фаза боя сохраняются, пока окно блокирует команды. */
+	bool IsCombatInputSuspended() const { return ActiveOverlay != ECombatOverlay::None; }
+
+	/** @brief Меняет состояние своего окна и пересчитывает боевое время. */
+	bool SetCombatOverlay(ECombatOverlay Overlay, bool bOpen);
 
 	/** @brief Подписчики результата неудачной записи во время Leaving. */
 	FCombatExitSaveFailed ExitSaveFailed;
@@ -662,4 +801,13 @@ private:
 
 	/** @brief Снимок противника при поражении. Shutdown() очищает его вместе с результатом боя. */
 	TOptional<FCombatDefeatSnapshot> DefeatSnapshot;
+
+	/** @brief Идентификатор столкновения до разрешения смерти в конце этого кадра. */
+	FGuid DeferredOutcomeEncounterID;
+
+	/** @brief Номер кадра, в котором погиб первый участник. */
+	uint64 DeferredOutcomeFrame = 0;
+
+	/** @brief Одноразовая подписка на конец игрового кадра, снимается при завершении сессии. */
+	FDelegateHandle DeferredOutcomeListener;
 };

@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Подключает ввод, камеру и интерфейс, передаёт сессии команды и публикует готовность к выходу из боя.
+ * @brief Подключает ввод, камеру, боевой HUD и окно паузы, передаёт сессии команды и публикует готовность к выходу из боя.
  */
 
 #include "Combat/CombatPlayerController.h"
@@ -19,6 +19,7 @@
 #include "Engine/World.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
+#include "Kismet/KismetSystemLibrary.h"
 
 
 
@@ -43,42 +44,37 @@ void ACombatPlayerController::UseArenaCamera(ACombatArena* Arena) {
 
 bool ACombatPlayerController::RequestNextStage(FName SaveSlot)
 {
-#if WITH_EDITOR
 	UCombatSession* Session = GetActiveCombatSession();
 	return Session && Session->RequestNextStage(SaveSlot);
-#else
-	return false;
-#endif
 }
 
 bool ACombatPlayerController::RequestEnterFarm()
 {
-#if WITH_EDITOR
 	UCombatSession* Session = GetActiveCombatSession();
 	return Session && Session->RequestEnterFarm();
-#else
-	return false;
-#endif
 }
 
 bool ACombatPlayerController::RequestReturnToExpedition()
 {
-#if WITH_EDITOR
 	UCombatSession* Session = GetActiveCombatSession();
 	return Session && Session->RequestReturnToExpedition();
-#else
-	return false;
-#endif
 }
 
 bool ACombatPlayerController::RequestExitCombat(FName SaveSlot)
 {
-#if WITH_EDITOR
 	UCombatSession* Session = GetActiveCombatSession();
 	return Session && Session->RequestExitCombat(SaveSlot);
-#else
-	return false;
-#endif
+}
+
+bool ACombatPlayerController::RequestUseAbilitySlot(int32 SlotIndex)
+{
+	UCombatSession* Session = GetActiveCombatSession();
+	return Session && Session->TryUseAbilitySlot(SlotIndex);
+}
+
+void ACombatPlayerController::HandleAbilitySlot(int32 SlotIndex)
+{
+	RequestUseAbilitySlot(SlotIndex);
 }
 
 bool ACombatPlayerController::SetLeaveConfirmationOpen(bool bOpen)
@@ -89,9 +85,14 @@ bool ACombatPlayerController::SetLeaveConfirmationOpen(bool bOpen)
 
 void ACombatPlayerController::NotifyCombatExitReady()
 {
+	RemovePauseWidget();
 	RemoveCombatWidget();
 	UE_LOG(LogCombatPlayerController, Display, TEXT("Combat exit ready: %s"), *GetName());
 	OnCombatExitReady.Broadcast();
+#if UE_BUILD_DEVELOPMENT && !WITH_EDITOR
+	// Автономный прототип закрывает игру после подтверждённой записи.
+	UKismetSystemLibrary::QuitGame(this, this, EQuitPreference::Quit, false);
+#endif
 }
 
 UCombatSession* ACombatPlayerController::GetActiveCombatSession() const
@@ -144,6 +145,46 @@ void ACombatPlayerController::RemoveCombatWidget()
 	}
 }
 
+void ACombatPlayerController::HandlePauseToggle()
+{
+	UCombatSession* Session = GetActiveCombatSession();
+	if (!Session || !PauseWidgetClass)
+	{
+		return;
+	}
+
+	if (PauseWidget)
+	{
+		if (Session->SetPauseMenuOpen(false))
+		{
+			RemovePauseWidget();
+		}
+		return;
+	}
+
+	if (!Session->SetPauseMenuOpen(true))
+	{
+		return;
+	}
+
+	PauseWidget = CreateWidget<UUserWidget>(this, PauseWidgetClass);
+	if (!PauseWidget || !PauseWidget->AddToPlayerScreen(20))
+	{
+		RemovePauseWidget();
+		Session->SetPauseMenuOpen(false);
+		UE_LOG(LogCombatPlayerController, Warning, TEXT("Could not open the pause widget."));
+	}
+}
+
+void ACombatPlayerController::RemovePauseWidget()
+{
+	if (PauseWidget)
+	{
+		PauseWidget->RemoveFromParent();
+		PauseWidget = nullptr;
+	}
+}
+
 void ACombatPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
@@ -153,20 +194,41 @@ void ACombatPlayerController::SetupInputComponent()
 		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
 
-	// Для рабочего маршрута нужны подсистема, компонент Enhanced Input и обе настройки Blueprint.
-	if (!Subsystem || !EnhancedInput || !CombatMappingContext || !CombatClickAction)
+	if (!Subsystem || !EnhancedInput)
 	{
-		UE_LOG(LogCombatPlayerController, Warning,
-			TEXT("Combat input requires a local Enhanced Input subsystem, component, mapping context and click action."));
+		UE_LOG(LogCombatPlayerController, Warning, TEXT("Input requires a local Enhanced Input subsystem and component."));
+		return;
+	}
+	LocalInputSubsystem = Subsystem;
+
+	if (CommonMappingContext && PauseAction)
+	{
+		EnhancedInput->BindAction(PauseAction.Get(), ETriggerEvent::Started, this, &ACombatPlayerController::HandlePauseToggle);
+		Subsystem->AddMappingContext(CommonMappingContext.Get(), 1);
+		UE_LOG(LogCombatPlayerController, Log, TEXT("Common input context added: %s"), *CommonMappingContext->GetName());
+	}
+
+	if (!CombatMappingContext || !CombatClickAction)
+	{
+		UE_LOG(LogCombatPlayerController, Warning, TEXT("Combat input requires a mapping context and click action."));
 		return;
 	}
 
 	// Started вызывает обработчик в начале нажатия. Удержание кнопки не повторяет запрос.
 	EnhancedInput->BindAction(CombatClickAction.Get(), ETriggerEvent::Started, this,
 		&ACombatPlayerController::HandleCombatClick);
-	// Активируем назначения клавиш для локального игрока и запоминаем, откуда снять контекст.
+
+	for (int32 SlotIndex = 0; SlotIndex < CombatAbilityActions.Num(); ++SlotIndex)
+	{
+		if (UInputAction* Action = CombatAbilityActions[SlotIndex].Get(); IsValid(Action))
+		{
+			EnhancedInput->BindAction(Action, ETriggerEvent::Started, this,
+				&ACombatPlayerController::HandleAbilitySlot, SlotIndex);
+		}
+	}
+
+	// Активируем назначения клавиш для локального игрока.
 	Subsystem->AddMappingContext(CombatMappingContext.Get(), 0);
-	CombatInputSubsystem = Subsystem;
 	UE_LOG(LogCombatPlayerController, Log, TEXT("Combat input context added: %s"), *CombatMappingContext->GetName());
 }
 
@@ -221,13 +283,22 @@ ECombatClickResult ACombatPlayerController::ClassifyCombatClick(const ACombatEne
 }
 
 void ACombatPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason) {
+	RemovePauseWidget();
 	RemoveCombatWidget();
-	// Снимаем контекст только из той подсистемы, куда его добавили. Запись в логе подтверждает снятие.
-	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = CombatInputSubsystem.Get())
+	// Снимаем контексты из подсистемы того же локального игрока.
+	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = LocalInputSubsystem.Get())
 	{
-		Subsystem->RemoveMappingContext(CombatMappingContext.Get());
-		CombatInputSubsystem.Reset();
-		UE_LOG(LogCombatPlayerController, Log, TEXT("Combat input context removed: %s"), *GetNameSafe(CombatMappingContext.Get()));
+		if (CommonMappingContext && PauseAction)
+		{
+			Subsystem->RemoveMappingContext(CommonMappingContext.Get());
+			UE_LOG(LogCombatPlayerController, Log, TEXT("Common input context removed: %s"), *CommonMappingContext->GetName());
+		}
+		if (CombatMappingContext && CombatClickAction)
+		{
+			Subsystem->RemoveMappingContext(CombatMappingContext.Get());
+			UE_LOG(LogCombatPlayerController, Log, TEXT("Combat input context removed: %s"), *CombatMappingContext->GetName());
+		}
+		LocalInputSubsystem.Reset();
 	}
 
 	UE_LOG(LogCombatPlayerController, Log, TEXT("End: %s"), *GetName());

@@ -41,24 +41,47 @@ void ACombatGameMode::BeginPlay() {
 	// Play In Editor должен быть выбран и как тип мира, и как режим проверки в Class Defaults.
 	if (bEnablePIECombatPreview && GetWorld()->WorldType == EWorldType::PIE)
 	{
-		if (!PIEProfileSlot.IsNone())
+		if (!PIEProfileSlot.IsNone() && !TryOpenCombatProfile(PIEProfileSlot))
 		{
-			UGameInstance* GameInstance = GetGameInstance();
-			UFurwardSaveSubsystem* Save = UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(GameInstance);
-			UFurwardProfileSubsystem* Profile = UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(GameInstance);
-			if (!Save || !Profile || !Save->TryOpenProfileSlot(PIEProfileSlot, *Profile))
-			{
-				UE_LOG(LogCombatGameMode, Warning, TEXT("PIE profile slot unavailable: %s; combat remains in Preparing."),
-					*PIEProfileSlot.ToString());
-				return;
-			}
+			return;
 		}
 		CombatSession->EnablePIECombatPreview(CombatRules.LoadSynchronous(), PIEProfileSlot);
 	}
+#elif UE_BUILD_DEVELOPMENT
+	const FName DevelopmentSlot(TEXT("FurwardCombatDevelopment"));
+	if (!TryOpenCombatProfile(DevelopmentSlot))
+	{
+		return;
+	}
+
+	UCombatRulesDefinition* Rules = CombatRules.LoadSynchronous();
+	if (IsValid(Rules) && CombatSession->ConfigureCombatStart(Rules, Rules->DevelopmentHeroBaseAttributes,
+		Rules->DevelopmentHeroStartingHealth, DevelopmentSlot))
+	{
+		UE_LOG(LogCombatGameMode, Display, TEXT("Development combat starting attributes configured: %s"), *Rules->GetName());
+	}
+	else
+	{
+		UE_LOG(LogCombatGameMode, Warning, TEXT("Development combat requires valid starting hero attributes in Combat Rules."));
+	}
 #endif
 
-	// Сессия получает строку этапа и использует GameMode как контекст для загрузки окружения.
-	CombatSession->RequestInitialStage(this, InitialStage);
+	// Сессия получает строку этапа. Мир для подгрузки она берёт у GameMode.
+	CombatSession->RequestInitialStage(InitialStage);
+}
+
+bool ACombatGameMode::TryOpenCombatProfile(FName Slot)
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	UFurwardSaveSubsystem* Save = UGameInstance::GetSubsystem<UFurwardSaveSubsystem>(GameInstance);
+	UFurwardProfileSubsystem* Profile = UGameInstance::GetSubsystem<UFurwardProfileSubsystem>(GameInstance);
+	if (Save && Profile && Save->TryOpenProfileSlot(Slot, *Profile))
+	{
+		return true;
+	}
+
+	UE_LOG(LogCombatGameMode, Error, TEXT("Combat profile slot unavailable: %s; combat remains in Preparing."), *Slot.ToString());
+	return false;
 }
 
 void ACombatGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason) {

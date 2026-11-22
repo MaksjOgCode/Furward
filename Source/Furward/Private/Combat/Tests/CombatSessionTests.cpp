@@ -92,6 +92,18 @@ bool FVerifyCombatClickCommands::Update()
 	Test->TestFalse(TEXT("A prepared session does not overwrite its attributes"),
 		Session->InitializeParticipantAttributes(HeroBase, HeroBase.MaxHealth, EnemyBase));
 
+	// Оба окна блокируют одну сессию. Команда чужого окна не возобновляет бой.
+	Test->TestTrue(TEXT("Ready can open the pause menu"), Session->SetPauseMenuOpen(true));
+	Test->TestFalse(TEXT("Pause prevents opening exit confirmation"), Session->SetLeaveConfirmationOpen(true));
+	Test->TestFalse(TEXT("Pause rejects the current enemy hit"), Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
+	Test->TestTrue(TEXT("Closing an absent exit confirmation is harmless"), Session->SetLeaveConfirmationOpen(false));
+	Test->TestEqual(TEXT("Closing an absent exit confirmation preserves pause"), Session->ApplyResolvedDamageToEnemy(Target, 10.0f), 0.0f);
+	Test->TestTrue(TEXT("Pause menu can close"), Session->SetPauseMenuOpen(false));
+	Test->TestTrue(TEXT("Ready can open exit confirmation"), Session->SetLeaveConfirmationOpen(true));
+	Test->TestFalse(TEXT("Exit confirmation prevents opening the pause menu"), Session->SetPauseMenuOpen(true));
+	Test->TestTrue(TEXT("Exit confirmation can close"), Session->SetLeaveConfirmationOpen(false));
+	Test->TestTrue(TEXT("Both overlays preserve the Ready phase"), Session->GetPhase() == ECombatPhase::Ready);
+
 	// Проверяем оба допустимых исхода для текущей цели и исключаем Ignore и пустую цель.
 	Test->TestTrue(TEXT("Ready accepts Hit for the active enemy"),
 		Session->TrySubmitClickAttack(ECombatClickResult::Hit, Target));
@@ -308,8 +320,8 @@ bool FVerifyCombatClickCommands::Update()
 
 bool FCombatClickCommandTest::RunTest(const FString& Parameters)
 {
-	// Запускаем ту же карту, на которой боевой режим подгружает окружение и создаёт участников.
-	if (!AutomationOpenMap(TEXT("/Game/Combat-System/Maps/L_Combat")))
+	// Перезагружаем L_Combat, чтобы получить новую сессию после предыдущего теста этой карты.
+	if (!AutomationOpenMap(TEXT("/Game/Combat-System/Maps/L_Combat"), true))
 	{
 		AddError(TEXT("Could not open L_Combat."));
 		return false;

@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды продолжения, смены режима и выхода.
+ * @brief Связывает WBP_Root_Combat с данными сессии и передаёт контроллеру команды слотов способностей, продолжения, смены режима и выхода.
  */
 
 #pragma once
@@ -17,7 +17,7 @@ class UProgressBar;
 class UTextBlock;
 enum class ECombatNextStageState : uint8;
 
-/** @brief Обновляет HUD и окна, привязывает команды игрока к контроллеру. */
+/** @brief Отображает здоровье, валюту, эффекты, кулдауны, прогресс и окна. Передаёт команды игрока контроллеру. */
 UCLASS(Abstract)
 class UCombatRootWidget : public UUserWidget
 {
@@ -35,12 +35,38 @@ public:
 	void StopObservingSession();
 
 protected:
+	/** @brief Показывает остатки эффектов и кулдаунов, пока HUD на экране. */
+	void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
 	/** @brief Снимает подписку при уничтожении экранного представления. */
 	void NativeDestruct() override;
 
 private:
 	/** @brief Читает состояние участников после уведомления и обновляет текст и полосы. */
 	void RefreshHealth();
+
+	/** @brief Привязывает кнопки и подписи настроенных слотов в панели General. */
+	void BindAbilitySlotControls();
+
+	/** @brief Добавляет элементы слота из General в порядке назначений контроллера. */
+	void BindAbilitySlot(FName ButtonName, FName TextName, FName ClickHandler);
+
+	/** @brief Читает снимки слотов и обновляет подписи и доступность. */
+	void RefreshAbilitySlots();
+
+	/** @brief Передаёт индекс слота контроллеру и сразу обновляет его показания. */
+	void RequestAbilitySlot(int32 SlotIndex);
+
+	/** @brief Передаёт клик первого слота тем же методом контроллера, что и клавиша 1. */
+	UFUNCTION()
+	void HandleUseAbilitySlotOne();
+
+	/** @brief Передаёт клик второго слота тем же методом контроллера, что и клавиша 2. */
+	UFUNCTION()
+	void HandleUseAbilitySlotTwo();
+
+	/** @brief Читает готовую сумму валюты через сессию и обновляет индикатор General. */
+	void RefreshCurrencyBalance();
 
 	/** @brief Выбирает панель режима и обновляет активный этап и доступные действия. */
 	void RefreshProgression();
@@ -99,6 +125,32 @@ private:
 	/** @brief Вложенный WBP_Combat_General с именем General в дереве WBP_Root_Combat. */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UUserWidget> General;
+
+	/** @brief Идентификатор валюты, которую показывает общий боевой HUD. None скрывает индикатор. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|HUD")
+	FName DisplayCurrencyID = TEXT("Scrap");
+
+	/** @brief Текст баланса в панели General. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> CurrencyBalanceText;
+
+	/** @brief Элементы одного слота в дереве General и последние значения его подписи. */
+	struct FAbilitySlotControls
+	{
+		/** @brief Кнопка принимает клики и в состоянии кулдауна. */
+		TWeakObjectPtr<UButton> Button;
+
+		/** @brief Название способности, клавиша и оставшиеся целые секунды. */
+		TWeakObjectPtr<UTextBlock> Label;
+
+		/** @brief Кэш подписи позволяет обновлять текст только при изменении. */
+		FText ShownName;
+		int32 ShownCooldownSeconds = INDEX_NONE;
+		int32 ShownEffectSeconds = INDEX_NONE;
+	};
+
+	/** @brief Элементы HUD в порядке слотов героя. Ссылки действуют пока General удерживает дерево виджетов. */
+	TArray<FAbilitySlotControls> AbilityControls;
 
 	/** @brief Числовое здоровье героя из панели General. */
 	UPROPERTY(Transient)
@@ -209,6 +261,9 @@ private:
 
 	/** @brief Подписка на изменения здоровья участников в текущей сессии. */
 	FDelegateHandle HealthListener;
+
+	/** @brief Подписка на открытие баланса и применение валютной награды текущей сессией. */
+	FDelegateHandle CurrencyListener;
 
 	/** @brief Подписка на данные экспедиции и состояние перехода. */
 	FDelegateHandle ProgressionListener;

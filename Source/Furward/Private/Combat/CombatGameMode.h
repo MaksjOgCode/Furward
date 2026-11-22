@@ -27,7 +27,7 @@ class ACombatHero;
  * @brief Владеет одной UCombatSession на время посещения карты L_Combat.
  *
  * Unreal создаёт экземпляр BP_Combat_GameMode для игрового мира.
- * В Class Defaults задают героя, начальный этап, правила и слот профиля для проверки PIE.
+ * В Class Defaults задают героя, начальный этап, правила и слот профиля для проверки PIE. Правила также задают стартовые HP и характеристики автономному Development-прототипу.
  */
 UCLASS()
 class ACombatGameMode : public AGameModeBase
@@ -55,7 +55,7 @@ protected:
 	/**
 	 * @brief Передаёт сессии начальный этап, когда Unreal запускает карту.
 	 *
-	 * Для проверки PIE GameMode сперва открывает выбранный слот и загружает правила. Затем сессия читает строку этапа.
+	 * GameMode открывает слот профиля до загрузки этапа. Автономный Development использует отдельный слот и свою секцию характеристик.
 	 * @pre InitGame() создал CombatSession.
 	 * @see UCombatSession::RequestInitialStage
 	 */
@@ -69,6 +69,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** @brief Поручает подсистеме сохранений загрузить профиль до запуска этапа. */
+	bool TryOpenCombatProfile(FName Slot);
+
 	/**
 	 * @brief Ссылка на таблицу и имя начальной строки из Class Defaults BP_Combat_GameMode.
 	 *
@@ -81,7 +84,7 @@ private:
 	/**
 	 * @brief Ассет общих правил боя, доступный для замены в Class Defaults.
 	 *
-	 * Мягкая ссылка указывает на DA_Combat_Rules по умолчанию. Включённая проверка PIE загружает ассет перед запуском.
+	 * Мягкая ссылка указывает на DA_Combat_Rules по умолчанию. GameMode загружает ассет при подготовке PIE или автономного Development-прототипа.
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Rules")
 	TSoftObjectPtr<UCombatRulesDefinition> CombatRules{

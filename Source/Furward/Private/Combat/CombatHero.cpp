@@ -2,10 +2,11 @@
 
 /**
  * @file
- * @brief Создаёт корень модели и компонент характеристик героя.
+ * @brief Создаёт корень модели и боевые компоненты героя.
  */
 
 #include "Combat/CombatHero.h"
+#include "Combat/Abilities/CombatAbilityComponent.h"
 #include "Combat/CombatAttributesComponent.h"
 #include "Components/SceneComponent.h"
 
@@ -18,9 +19,15 @@ ACombatHero::ACombatHero()
 
 	// Каждый экземпляр героя получает собственное состояние здоровья.
 	Attributes = CreateDefaultSubobject<UCombatAttributesComponent>(TEXT("Attributes"));
+	Abilities = CreateDefaultSubobject<UCombatAbilityComponent>(TEXT("Abilities"));
 }
 
 UCombatAttributesComponent& ACombatHero::GetAttributes() const
 {
 	return *Attributes;
+}
+
+UCombatAbilityComponent& ACombatHero::GetAbilities() const
+{
+	return *Abilities;
 }

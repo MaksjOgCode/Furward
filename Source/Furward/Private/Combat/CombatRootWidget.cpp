@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Отображает состояние сессии и передаёт контроллеру действия продолжения, смены режима и выхода.
+ * @brief Отображает состояние сессии и передаёт контроллеру действия слотов способностей, продолжения, смены режима и выхода.
  */
 
 #include "Combat/CombatRootWidget.h"
@@ -66,6 +66,7 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		return false;
 	}
 
+	CurrencyBalanceText = Cast<UTextBlock>(General->GetWidgetFromName(TEXT("CurrencyBalanceText")));
 	Progression = Cast<UUserWidget>(General->GetWidgetFromName(TEXT("Progression")));
 	if (Progression)
 	{
@@ -102,7 +103,12 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 	}
 
 	CombatSession = &Session;
+	BindAbilitySlotControls();
 	HealthListener = Session.OnParticipantHealthChanged().AddUObject(this, &UCombatRootWidget::RefreshHealth);
+	if (CurrencyBalanceText && !DisplayCurrencyID.IsNone())
+	{
+		CurrencyListener = Session.OnCurrencyBalancesChanged().AddUObject(this, &UCombatRootWidget::RefreshCurrencyBalance);
+	}
 	if (Progression || Farm)
 	{
 		ProgressionListener = Session.OnProgressionChanged().AddUObject(this, &UCombatRootWidget::RefreshProgression);
@@ -116,6 +122,8 @@ bool UCombatRootWidget::ObserveSession(UCombatSession& Session)
 		ExitSaveFailedListener = Session.OnExitSaveFailed().AddUObject(this, &UCombatRootWidget::HandleExitSaveFailed);
 	}
 	RefreshHealth();
+	RefreshCurrencyBalance();
+	RefreshAbilitySlots();
 	RefreshProgression();
 	ShowDefeat();
 	return true;
@@ -315,6 +323,7 @@ void UCombatRootWidget::StopObservingSession()
 	if (UCombatSession* Session = CombatSession.Get())
 	{
 		Session->OnParticipantHealthChanged().Remove(HealthListener);
+		Session->OnCurrencyBalancesChanged().Remove(CurrencyListener);
 		Session->OnProgressionChanged().Remove(ProgressionListener);
 		Session->OnDefeatRecorded().Remove(DefeatListener);
 		Session->OnExitSaveFailed().Remove(ExitSaveFailedListener);
@@ -348,11 +357,146 @@ void UCombatRootWidget::StopObservingSession()
 	{
 		ReturnToExpeditionButton->OnClicked.RemoveDynamic(this, &UCombatRootWidget::HandleReturnToExpedition);
 	}
+	for (const FAbilitySlotControls& Controls : AbilityControls)
+	{
+		if (UButton* Button = Controls.Button.Get())
+		{
+			Button->OnClicked.RemoveAll(this);
+			Button->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+	AbilityControls.Reset();
+
 	DefeatListener.Reset();
 	ExitSaveFailedListener.Reset();
 	HealthListener.Reset();
+	CurrencyListener.Reset();
 	ProgressionListener.Reset();
 	CombatSession.Reset();
+}
+
+void UCombatRootWidget::BindAbilitySlotControls()
+{
+	BindAbilitySlot(TEXT("AbilitySlotOneButton"), TEXT("AbilitySlotOneText"),
+		GET_FUNCTION_NAME_CHECKED(UCombatRootWidget, HandleUseAbilitySlotOne));
+	BindAbilitySlot(TEXT("AbilitySlotTwoButton"), TEXT("AbilitySlotTwoText"),
+		GET_FUNCTION_NAME_CHECKED(UCombatRootWidget, HandleUseAbilitySlotTwo));
+}
+
+void UCombatRootWidget::BindAbilitySlot(FName ButtonName, FName TextName, FName ClickHandler)
+{
+	FAbilitySlotControls& Controls = AbilityControls.AddDefaulted_GetRef();
+	Controls.Label = Cast<UTextBlock>(General->GetWidgetFromName(TextName));
+	if (UButton* Button = Cast<UButton>(General->GetWidgetFromName(ButtonName)))
+	{
+		Controls.Button = Button;
+		Button->SetVisibility(ESlateVisibility::Collapsed);
+		if (Controls.Label.IsValid())
+		{
+			FScriptDelegate Listener;
+			Listener.BindUFunction(this, ClickHandler);
+			Button->OnClicked.AddUnique(Listener);
+		}
+	}
+}
+
+void UCombatRootWidget::HandleUseAbilitySlotOne()
+{
+	RequestAbilitySlot(0);
+}
+
+void UCombatRootWidget::HandleUseAbilitySlotTwo()
+{
+	RequestAbilitySlot(1);
+}
+
+void UCombatRootWidget::RequestAbilitySlot(int32 SlotIndex)
+{
+	if (ACombatPlayerController* Controller = GetOwningPlayer<ACombatPlayerController>())
+	{
+		Controller->RequestUseAbilitySlot(SlotIndex);
+		RefreshAbilitySlots();
+	}
+}
+
+void UCombatRootWidget::RefreshAbilitySlots()
+{
+	const UCombatSession* Session = CombatSession.Get();
+	if (!Session)
+	{
+		return;
+	}
+
+	for (int32 SlotIndex = 0; SlotIndex < AbilityControls.Num(); ++SlotIndex)
+	{
+		FAbilitySlotControls& Controls = AbilityControls[SlotIndex];
+		UButton* Button = Controls.Button.Get();
+		UTextBlock* Label = Controls.Label.Get();
+		if (!Button || !Label)
+		{
+			continue;
+		}
+
+		const TOptional<FCombatAbilitySlotSnapshot> AbilitySlot = Session->GetAbilitySlotForDisplay(SlotIndex);
+		const ESlateVisibility SlotVisibility = AbilitySlot.IsSet() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+		if (Button->GetVisibility() != SlotVisibility)
+		{
+			Button->SetVisibility(SlotVisibility);
+		}
+		if (!AbilitySlot.IsSet())
+		{
+			continue;
+		}
+
+		const int32 CooldownSeconds = FMath::CeilToInt(AbilitySlot->CooldownRemaining);
+		const int32 EffectSeconds = FMath::CeilToInt(AbilitySlot->EffectRemaining);
+		if (CooldownSeconds != Controls.ShownCooldownSeconds || EffectSeconds != Controls.ShownEffectSeconds ||
+			!Controls.ShownName.EqualTo(AbilitySlot->DisplayName))
+		{
+			const FText Name = AbilitySlot->DisplayName.IsEmpty() ? LOCTEXT("DefaultAbilityName", "Способность") : AbilitySlot->DisplayName;
+			const FText Title = FText::Format(LOCTEXT("AbilitySlotTitle", "{0} [{1}]"), Name, FText::AsNumber(SlotIndex + 1));
+			if (EffectSeconds > 0 && CooldownSeconds > 0)
+			{
+				Label->SetText(FText::Format(LOCTEXT("AbilitySlotEffectAndCooldown", "{0}\nАктивно {1} с · Кулдаун {2} с"),
+					Title, FText::AsNumber(EffectSeconds), FText::AsNumber(CooldownSeconds)));
+			}
+			else if (EffectSeconds > 0)
+			{
+				Label->SetText(FText::Format(LOCTEXT("AbilitySlotEffect", "{0}\nАктивно {1} с"), Title, FText::AsNumber(EffectSeconds)));
+			}
+			else
+			{
+				Label->SetText(CooldownSeconds > 0
+					? FText::Format(LOCTEXT("AbilitySlotCooldown", "{0}\nКулдаун {1} с"), Title, FText::AsNumber(CooldownSeconds))
+					: Title);
+			}
+
+			Controls.ShownCooldownSeconds = CooldownSeconds;
+			Controls.ShownEffectSeconds = EffectSeconds;
+			Controls.ShownName = AbilitySlot->DisplayName;
+		}
+
+		// Оформление показывает состояние, а кнопка продолжает перехватывать клик до проверки сессией.
+		FLinearColor Color(0.22f, 0.25f, 0.30f);
+		if (EffectSeconds > 0)
+		{
+			Color = FLinearColor(0.48f, 0.38f, 0.16f);
+		}
+		else if (AbilitySlot->bCanActivate)
+		{
+			Color = FLinearColor(0.24f, 0.56f, 0.37f);
+		}
+		if (Button->GetBackgroundColor() != Color)
+		{
+			Button->SetBackgroundColor(Color);
+		}
+	}
+}
+
+void UCombatRootWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	RefreshAbilitySlots();
 }
 
 void UCombatRootWidget::NativeDestruct()
@@ -368,6 +512,24 @@ void UCombatRootWidget::RefreshHealth()
 		UpdateHealthIndicator(*HeroHealthText, *HeroHealthBar, Session->GetHeroHealthForDisplay(), LOCTEXT("HeroHP", "Герой  {0}/{1}"));
 		UpdateHealthIndicator(*EnemyHealthText, *EnemyHealthBar, Session->GetEnemyHealthForDisplay(), LOCTEXT("EnemyHP", "Противник  {0}/{1}"));
 	}
+}
+
+void UCombatRootWidget::RefreshCurrencyBalance()
+{
+	const UCombatSession* Session = CombatSession.Get();
+	if (!CurrencyBalanceText || !Session)
+	{
+		return;
+	}
+	if (DisplayCurrencyID.IsNone())
+	{
+		CurrencyBalanceText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	CurrencyBalanceText->SetText(FText::Format(LOCTEXT("CurrencyBalance", "{0}  {1}"),
+		FText::FromName(DisplayCurrencyID), FText::AsNumber(Session->GetCurrencyBalanceForDisplay(DisplayCurrencyID))));
+	CurrencyBalanceText->SetVisibility(ESlateVisibility::HitTestInvisible);
 }
 
 void UCombatRootWidget::RefreshProgression()
@@ -422,9 +584,15 @@ void UCombatRootWidget::RefreshNextStage(ECombatNextStageState State)
 		return;
 	}
 
-	const bool bAvailable = State != ECombatNextStageState::Unavailable;
+	const bool bAvailable = State != ECombatNextStageState::Unavailable && State != ECombatNextStageState::EnvironmentLoading;
 	NextStageButton->SetVisibility(bAvailable ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	NextStageButton->SetIsEnabled(bAvailable && State != ECombatNextStageState::Saving);
+	if (UTextBlock* Label = Cast<UTextBlock>(NextStageButton->GetContent()))
+	{
+		Label->SetText(State == ECombatNextStageState::EnvironmentFailed
+			? LOCTEXT("RetryEnvironment", "Повторить загрузку")
+			: LOCTEXT("NextStage", "Следующий этап"));
+	}
 
 	FText Message;
 	switch (State)
@@ -437,6 +605,12 @@ void UCombatRootWidget::RefreshNextStage(ECombatNextStageState State)
 		break;
 	case ECombatNextStageState::StartFailed:
 		Message = LOCTEXT("NextStageStartFailed", "Не удалось начать следующий этап. Повтори переход.");
+		break;
+	case ECombatNextStageState::EnvironmentLoading:
+		Message = LOCTEXT("EnvironmentLoading", "Загружаем окружение…");
+		break;
+	case ECombatNextStageState::EnvironmentFailed:
+		Message = LOCTEXT("EnvironmentFailed", "Не удалось загрузить арену. Повтори загрузку или покинь бой.");
 		break;
 	default:
 		break;
