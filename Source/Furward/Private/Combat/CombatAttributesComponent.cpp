@@ -61,6 +61,23 @@ float UCombatAttributesComponent::ApplyDamage(float Damage)
 	return AppliedDamage;
 }
 
+float UCombatAttributesComponent::ApplyHealing(float Amount)
+{
+	if (CurrentHealth <= 0.0f || !FMath::IsFinite(Amount) || Amount <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	const float PreviousHealth = CurrentHealth;
+	CurrentHealth += FMath::Min(Amount, BaseAttributes.MaxHealth - CurrentHealth);
+	const float RestoredHealth = CurrentHealth - PreviousHealth;
+	if (RestoredHealth > 0.0f)
+	{
+		HealthChanged.Broadcast(PreviousHealth, CurrentHealth);
+	}
+	return RestoredHealth;
+}
+
 float UCombatAttributesComponent::ReduceHealth(float Damage)
 {
 	// Только живой участник с готовым здоровьем может потерять HP.

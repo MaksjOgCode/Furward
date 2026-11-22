@@ -2,7 +2,7 @@
 
 /**
  * @file
- * @brief Проверяет расчёт характеристик противников, инициализацию здоровья, урон и однократное событие смерти.
+ * @brief Проверяет расчёт характеристик противников, инициализацию здоровья, урон, лечение и однократное событие смерти.
  */
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -75,6 +75,42 @@ bool FCombatAttributesHealthTest::RunTest(const FString& Parameters)
 
 	Attributes->OnHealthChanged().Remove(HealthHandle);
 	Attributes->OnDeath().Remove(DeathHandle);
+	return true;
+}
+
+/** @brief Проверяет фактический прирост HP и события лечения. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCombatAttributesHealingTest, "Furward.Combat.Attributes.Healing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::ProductFilter)
+
+bool FCombatAttributesHealingTest::RunTest(const FString& Parameters)
+{
+	UCombatAttributesComponent* Attributes = NewObject<UCombatAttributesComponent>();
+	TestEqual(TEXT("Uninitialized health cannot be healed"), Attributes->ApplyHealing(25.0f), 0.0f);
+	TestTrue(TEXT("Health initialized"), Attributes->InitializeAttributes(FCombatBaseAttributes{100.0f, 20.0f, 5.0f}, 90.0f));
+
+	TArray<TPair<float, float>> HealthChanges;
+	const FDelegateHandle Handle = Attributes->OnHealthChanged().AddLambda(
+		[&HealthChanges](float Previous, float Current)
+		{
+			HealthChanges.Emplace(Previous, Current);
+		});
+
+	TestEqual(TEXT("Negative healing is rejected"), Attributes->ApplyHealing(-25.0f), 0.0f);
+	TestEqual(TEXT("Non-finite healing is rejected"),
+		Attributes->ApplyHealing(std::numeric_limits<float>::infinity()), 0.0f);
+	TestEqual(TEXT("Healing is limited to missing HP"), Attributes->ApplyHealing(25.0f), 10.0f);
+	TestEqual(TEXT("Healing at full health has no effect"), Attributes->ApplyHealing(25.0f), 0.0f);
+	if (TestEqual(TEXT("Only effective healing is published"), HealthChanges.Num(), 1))
+	{
+		TestEqual(TEXT("Healing publishes previous health"), HealthChanges[0].Key, 90.0f);
+		TestEqual(TEXT("Healing publishes maximum health"), HealthChanges[0].Value, 100.0f);
+	}
+
+	Attributes->ApplyDamage(100.0f);
+	TestEqual(TEXT("Healing cannot revive a dead participant"), Attributes->ApplyHealing(25.0f), 0.0f);
+	TestTrue(TEXT("Participant remains dead"), Attributes->IsDead());
+	TestEqual(TEXT("Failed revival does not publish health"), HealthChanges.Num(), 2);
+	Attributes->OnHealthChanged().Remove(Handle);
 	return true;
 }
 
