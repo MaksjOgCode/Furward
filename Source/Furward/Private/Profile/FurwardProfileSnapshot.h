@@ -41,7 +41,11 @@ struct FFurwardProfileSnapshot
 	UPROPERTY()
 	int64 FarmVictoryCount = 0;
 
-	/** @brief Номер состояния профиля, увеличиваемый при каждом успешном применении результата. */
+	/** @brief Последний выбранный этап. None означает начальный этап экспедиции. */
+	UPROPERTY()
+	FName ActiveExpeditionStage;
+
+	/** @brief Ревизия профиля. Увеличивается после победы или выбора этапа. */
 	UPROPERTY()
 	int64 Revision = 0;
 };

@@ -87,6 +87,12 @@ public:
 	 */
 	FFurwardProfileSnapshot CreateSnapshot() const;
 
+	/** @brief Читает сохранённую точку входа в экспедицию. */
+	FName GetActiveExpeditionStage() const { return Progress.ActiveExpeditionStage; }
+
+	/** @brief Запоминает выбранный этап и увеличивает ревизию при изменении. */
+	bool SetActiveExpeditionStage(FName StageID);
+
 	/** @brief Возвращает ревизию профиля без копирования снимка. Ноль соответствует новому профилю. */
 	int64 GetRevision() const { return Progress.Revision; }
 

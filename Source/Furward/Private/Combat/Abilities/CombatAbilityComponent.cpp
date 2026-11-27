@@ -9,7 +9,7 @@
 #include "Combat/Abilities/CombatAbility.h"
 #include "Combat/Abilities/CombatAbilityDefinition.h"
 #include "Combat/Abilities/CombatEffect.h"
-#include "Combat/CombatHero.h"
+#include "Combat/Participants/CombatHero.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
 

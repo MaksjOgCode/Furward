@@ -8,9 +8,9 @@
 #include "Combat/Abilities/CombatAbility.h"
 #include "Combat/Abilities/CombatAbilityComponent.h"
 #include "Combat/Abilities/CombatAbilityDefinition.h"
-#include "Combat/CombatAttributesComponent.h"
-#include "Combat/CombatHero.h"
-#include "Combat/CombatSession.h"
+#include "Combat/Participants/CombatAttributesComponent.h"
+#include "Combat/Participants/CombatHero.h"
+#include "Combat/Session/CombatSession.h"
 
 bool UCombatMedkitAbility::TryActivate(UCombatSession&, ACombatHero& Hero, const UCombatAbilityDefinition& Definition)
 {

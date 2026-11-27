@@ -7,6 +7,11 @@
 
 #include "Save/FurwardSaveSubsystem.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/Crc.h"
+#include "PlatformFeatures.h"
+#include "SaveGameSystem.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
 #include "Misc/Paths.h"
 #include "Profile/FurwardProfileSubsystem.h"
 #include "Save/FurwardSaveGame.h"
@@ -20,6 +25,120 @@ bool IsValidSlotName(FName SlotName)
 {
 	const FString Name = SlotName.ToString();
 	return !SlotName.IsNone() && FPaths::GetCleanFilename(Name) == Name && FPaths::ValidatePath(Name);
+}
+
+constexpr uint32 ProfileFileTag = 0x50535746; // FWSP
+constexpr uint32 UnrealSaveTag = 0x53415647; // GVAS
+constexpr int32 ProfileFileHeaderBytes = 3 * sizeof(uint32);
+
+/** @brief Проверяет длину строки заголовка до создания FString. */
+bool ReadSaveHeaderString(FMemoryReader& Reader, FString& Out)
+{
+	const int64 Start = Reader.Tell();
+	int32 Length = 0;
+	Reader << Length;
+	const int64 Characters = FMath::Abs(int64(Length));
+	const int64 Bytes = Characters * (Length < 0 ? sizeof(UTF16CHAR) : 1);
+	if (Reader.IsError() || Characters >= NAME_SIZE || Bytes > Reader.TotalSize() - Reader.Tell())
+	{
+		return false;
+	}
+	Reader.Seek(Start);
+	Reader << Out;
+	return !Reader.IsError();
+}
+
+/** @brief Проверяет заголовок сохранений Furward, записанных штатным Unreal в UE5. */
+bool IsFurwardSavePayload(const TArray<uint8>& Data)
+{
+	FMemoryReader Reader(Data, true);
+	uint32 Tag = 0;
+	int32 Format = 0;
+	Reader << Tag << Format;
+	if (Reader.IsError() || Tag != UnrealSaveTag || Format != 3)
+	{
+		return false;
+	}
+
+	// Формат 3 хранит версии пакета UE4 и UE5, затем FEngineVersion.
+	constexpr int32 EngineVersionPrefixBytes = 2 * sizeof(int32) + 3 * sizeof(uint16) + sizeof(uint32);
+	if (Reader.TotalSize() - Reader.Tell() < EngineVersionPrefixBytes)
+	{
+		return false;
+	}
+	Reader.Seek(Reader.Tell() + EngineVersionPrefixBytes);
+	FString Branch;
+	if (!ReadSaveHeaderString(Reader, Branch))
+	{
+		return false;
+	}
+
+	int32 CustomVersionFormat = 0;
+	int32 CustomVersionCount = 0;
+	Reader << CustomVersionFormat << CustomVersionCount;
+	constexpr int32 CustomVersionBytes = 5 * sizeof(uint32);
+	if (Reader.IsError() || CustomVersionFormat != 3 || CustomVersionCount < 0 ||
+		int64(CustomVersionCount) * CustomVersionBytes > Reader.TotalSize() - Reader.Tell())
+	{
+		return false;
+	}
+	Reader.Seek(Reader.Tell() + int64(CustomVersionCount) * CustomVersionBytes);
+
+	FString ClassPath;
+	return ReadSaveHeaderString(Reader, ClassPath) &&
+		ClassPath == UFurwardSaveGame::StaticClass()->GetPathName() && Reader.Tell() < Reader.TotalSize();
+}
+
+/** @brief Отделяет проверенный payload от контрольной суммы. Старые слоты читаются по сигнатуре UE. */
+bool ReadProfileSave(const FString& Slot, TArray<uint8>& Payload)
+{
+	TArray<uint8> Data;
+	if (!UGameplayStatics::LoadDataFromSlot(Data, Slot, UFurwardSaveSubsystem::LocalUserIndex))
+	{
+		return false;
+	}
+
+	FMemoryReader Reader(Data, true);
+	uint32 Tag = 0;
+	Reader << Tag;
+	if (Reader.IsError())
+	{
+		return false;
+	}
+	if (Tag == UnrealSaveTag)
+	{
+		Payload = MoveTemp(Data);
+		return IsFurwardSavePayload(Payload);
+	}
+
+	uint32 Size = 0;
+	uint32 Checksum = 0;
+	Reader << Size << Checksum;
+	if (Reader.IsError() || Tag != ProfileFileTag || int64(Size) != Data.Num() - ProfileFileHeaderBytes ||
+		FCrc::MemCrc32(Data.GetData() + ProfileFileHeaderBytes, Size) != Checksum)
+	{
+		return false;
+	}
+
+	Payload.Append(Data.GetData() + ProfileFileHeaderBytes, Size);
+	return IsFurwardSavePayload(Payload);
+}
+
+bool WriteProfileSave(UFurwardSaveGame& SaveGame, TArray<uint8>& Data)
+{
+	TArray<uint8> Payload;
+	if (!UGameplayStatics::SaveGameToMemory(&SaveGame, Payload))
+	{
+		return false;
+	}
+
+	FMemoryWriter Writer(Data, true);
+	uint32 Tag = ProfileFileTag;
+	uint32 Size = Payload.Num();
+	uint32 Checksum = FCrc::MemCrc32(Payload.GetData(), Size);
+	Writer << Tag << Size << Checksum;
+	Writer.Serialize(Payload.GetData(), Size);
+	return !Writer.IsError();
 }
 }
 
@@ -43,7 +162,9 @@ bool UFurwardSaveSubsystem::TryOpenProfileSlot(FName SlotName, UFurwardProfileSu
 	const FString Name = SlotName.ToString();
 	if (UGameplayStatics::DoesSaveGameExist(Name, LocalUserIndex))
 	{
-		const UFurwardSaveGame* SavedGame = Cast<UFurwardSaveGame>(UGameplayStatics::LoadGameFromSlot(Name, LocalUserIndex));
+		TArray<uint8> Payload;
+		const UFurwardSaveGame* SavedGame = ReadProfileSave(Name, Payload)
+			? Cast<UFurwardSaveGame>(UGameplayStatics::LoadGameFromMemory(Payload)) : nullptr;
 		const FFurwardProfileSnapshot* Snapshot = SavedGame ? SavedGame->GetProfileSnapshot() : nullptr;
 		if (!Snapshot || !Profile.TryRestoreSnapshot(*Snapshot))
 		{
@@ -84,7 +205,16 @@ bool UFurwardSaveSubsystem::RequestSave(FName SlotName, FFurwardProfileSnapshot 
 
 	Status.LatestRequestedRevision = Snapshot.Revision;
 	Status.bLatestWriteFailed = false;
-	PendingSaves.Add(FSaveRequest{SlotName, MoveTemp(Snapshot), FGuid::NewGuid()});
+	FSaveRequest Latest{SlotName, MoveTemp(Snapshot), FGuid::NewGuid()};
+	if (FSaveRequest* Queued = PendingSaves.FindByPredicate([SlotName](const FSaveRequest& Request)
+		{ return Request.SlotName == SlotName; }))
+	{
+		*Queued = MoveTemp(Latest);
+	}
+	else
+	{
+		PendingSaves.Add(MoveTemp(Latest));
+	}
 	StartNextSave();
 	return true;
 }
@@ -112,9 +242,25 @@ void UFurwardSaveSubsystem::StartNextSave()
 		UFurwardSaveGame* SaveGame = NewObject<UFurwardSaveGame>(this);
 		SaveGame->SetProfileSnapshot(Request.Snapshot);
 
-		// Unreal сериализует SaveGame в игровом потоке. Фоновая запись получает готовые байты.
-		UGameplayStatics::AsyncSaveGameToSlot(SaveGame, Request.SlotName.ToString(), LocalUserIndex,
-			FAsyncSaveGameToSlotDelegate::CreateUObject(this, &UFurwardSaveSubsystem::HandleSaveFinished, Request.RequestID));
+		const FString Slot = Request.SlotName.ToString();
+		const FGuid RequestID = Request.RequestID;
+		TSharedRef<TArray<uint8>> Data = MakeShared<TArray<uint8>>();
+		ISaveGameSystem* SaveSystem = IPlatformFeaturesModule::Get().GetSaveGameSystem();
+		if (!SaveSystem || !WriteProfileSave(*SaveGame, *Data))
+		{
+			HandleSaveFinished(Slot, LocalUserIndex, false, RequestID);
+			continue;
+		}
+
+		const FPlatformUserId User = FPlatformMisc::GetPlatformUserForUserIndex(LocalUserIndex);
+		SaveSystem->SaveGameAsync(false, *Slot, User, Data,
+			[WeakThis = TWeakObjectPtr<UFurwardSaveSubsystem>(this), RequestID](const FString& SavedSlot, FPlatformUserId, bool bSuccess)
+			{
+				if (UFurwardSaveSubsystem* Self = WeakThis.Get())
+				{
+					Self->HandleSaveFinished(SavedSlot, LocalUserIndex, bSuccess, RequestID);
+				}
+			});
 	}
 }
 

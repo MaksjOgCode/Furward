@@ -78,9 +78,21 @@ FFurwardProfileSnapshot UFurwardProfileSubsystem::CreateSnapshot() const
 	return Progress;
 }
 
+bool UFurwardProfileSubsystem::SetActiveExpeditionStage(FName StageID)
+{
+	if (StageID.IsNone() || StageID == Progress.ActiveExpeditionStage || Progress.Revision == MAX_int64)
+	{
+		return false;
+	}
+
+	Progress.ActiveExpeditionStage = StageID;
+	++Progress.Revision;
+	return true;
+}
+
 bool UFurwardProfileSubsystem::TryRestoreSnapshot(const FFurwardProfileSnapshot& Snapshot)
 {
-	// В текущей версии каждая учтённая победа даёт одну ревизию и один EncounterID.
+	// Победа добавляет EncounterID, а выбор этапа также может увеличить ревизию.
 	int64 VictoryCount = Snapshot.CompletedExpeditionStages.Num();
 	for (const TPair<FName, int32>& Stage : Snapshot.ExpeditionClearsByStage)
 	{
@@ -91,8 +103,10 @@ bool UFurwardProfileSubsystem::TryRestoreSnapshot(const FFurwardProfileSnapshot&
 		VictoryCount += Stage.Value;
 	}
 
-	if (Snapshot.Revision != Snapshot.RecordedEncounterIDs.Num() || VictoryCount > Snapshot.Revision ||
-		Snapshot.FarmVictoryCount != Snapshot.Revision - VictoryCount)
+	const int64 RecordedVictories = Snapshot.RecordedEncounterIDs.Num();
+	if (Snapshot.Revision < RecordedVictories || VictoryCount > RecordedVictories ||
+		Snapshot.FarmVictoryCount != RecordedVictories - VictoryCount ||
+		(Snapshot.Revision != RecordedVictories && Snapshot.ActiveExpeditionStage.IsNone()))
 	{
 		return false;
 	}
